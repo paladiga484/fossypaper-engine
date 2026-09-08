@@ -1,10 +1,18 @@
-"""fossypaper.engine — the backend. No Qt here, so it's testable on its own.
+"""fossypaper.engine — the backend. No Qt, no curses, so it stays testable alone.
 
-Wraps linux-wallpaperengine: enumerates the Wallpaper Engine workshop library,
-classifies pure-GL vs (broken-on-NVIDIA) video scenes, parses each wallpaper's
-customizable PROPERTIES, drives the render process with fossypaper's extra
-controls (fps / scaling / layer / gpu / effects), and can grab a frame to sync a
-colour theme out to your shells.
+What it knows how to do:
+
+  * **Find wallpapers** across every library root you have — Steam's Workshop
+    dir, fossypaper's own downloads, and anything you point
+    `FOSSYPAPER_LIBRARY` at — and read each one's `project.json` for what it
+    actually is, instead of guessing from filenames.
+  * **Route each wallpaper to a renderer that can actually draw it**: WE scenes
+    to `linux-wallpaperengine`, video to `mpvpaper`, stills to `swww` when you
+    have it and `mpvpaper` when you don't.
+  * **Drive the renderer with every knob it exposes** — per-output backgrounds,
+    spanning, scaling/clamp, layer, fps, GPU/EGL selection, audio, effects, and
+    the fullscreen-pause rules that keep a wallpaper from eating a game's frames.
+  * **Sync a colour theme** from the wallpaper's own pixels.
 """
 from __future__ import annotations
 
@@ -13,134 +21,208 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from . import properties as props_mod
 
 STATE = Path.home() / ".local/state/fossypaper"
 BIN = shutil.which("linux-wallpaperengine") or "linux-wallpaperengine"
 
-# Library path is not tied to a Steam/Wallpaper-Engine install. It defaults to
-# Steam's workshop dir if present, but any folder of `<id>/(scene.pkg|*.mp4)`
-# works — including one fossypaper fills itself from the Workshop web.
-_STEAM_WS = Path.home() / ".local/share/Steam/steamapps/workshop/content/431960"
-_OWN_LIB = Path.home() / ".local/share/fossypaper/wallpapers"
-WE_DIR = Path(os.environ.get("FOSSYPAPER_LIBRARY")
-              or (_STEAM_WS if _STEAM_WS.is_dir() else _OWN_LIB))
+STEAM_WORKSHOP = Path.home() / ".local/share/Steam/steamapps/workshop/content/431960"
+FLATPAK_WORKSHOP = (Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam"
+                    "/steamapps/workshop/content/431960")
+OWN_LIBRARY = Path.home() / ".local/share/fossypaper/wallpapers"
+
+
+def library_roots() -> list[Path]:
+    """Every folder we look in, most-specific first. `FOSSYPAPER_LIBRARY` may
+    name several, colon-separated, like a PATH."""
+    roots: list[Path] = []
+    for part in (os.environ.get("FOSSYPAPER_LIBRARY") or "").split(":"):
+        if part.strip():
+            roots.append(Path(part.strip()).expanduser())
+    roots += [STEAM_WORKSHOP, FLATPAK_WORKSHOP, OWN_LIBRARY]
+    seen, out = set(), []
+    for r in roots:
+        if r not in seen and r.is_dir():
+            seen.add(r); out.append(r)
+    return out
+
+
+class _DirProxy:
+    """`WE_DIR` used to be a single Path and other code indexes it as one.
+    Keep that working while there are really several roots: `WE_DIR / wid`
+    resolves to whichever root holds that wallpaper."""
+
+    def _primary(self) -> Path:
+        roots = library_roots()
+        return roots[0] if roots else OWN_LIBRARY
+
+    def __truediv__(self, wid) -> Path:
+        for root in library_roots():
+            if (root / str(wid)).is_dir():
+                return root / str(wid)
+        return self._primary() / str(wid)
+
+    def is_dir(self) -> bool:
+        return bool(library_roots())
+
+    def __fspath__(self) -> str:
+        return str(self._primary())
+
+    def __str__(self) -> str:
+        roots = library_roots()
+        return "  ".join(str(r) for r in roots) if roots else str(OWN_LIBRARY)
+
+
+WE_DIR = _DirProxy()
 
 
 def have_renderer() -> bool:
     return shutil.which("linux-wallpaperengine") is not None
 
 
-def download_workshop(wid: str) -> tuple[bool, str]:
-    """Pull a wallpaper from the Steam Workshop web, no WE app required. Uses
-    steamcmd when present (WE-owned content needs a Steam login); otherwise
-    returns guidance. Downloads land in the configured library dir."""
-    if not shutil.which("steamcmd"):
-        return False, ("install `steamcmd` to pull from the Workshop, then: "
-                       "steamcmd +login <user> +workshop_download_item 431960 "
-                       f"{wid} +quit  (drops into {_STEAM_WS})")
-    # Anonymous works for some items; WE content generally needs the owning login.
-    try:
-        r = subprocess.run(["steamcmd", "+login", "anonymous",
-                            "+workshop_download_item", "431960", wid, "+quit"],
-                           capture_output=True, text=True, timeout=300)
-        ok = "Success" in r.stdout or (_STEAM_WS / wid).is_dir()
-        return ok, ("downloaded" if ok else
-                    "steamcmd couldn't fetch it anonymously — log in with your Steam "
-                    "account (owns WE) and retry.")
-    except (OSError, subprocess.SubprocessError) as e:
-        return False, f"download error: {e}"
-
-
 # --------------------------------------------------------------------------- #
 #  Library model
 # --------------------------------------------------------------------------- #
-@dataclass
-class Property:
-    key: str
-    kind: str            # color | slider | boolean | textinput | combo | texture
-    text: str
-    value: str
-    mn: float = 0.0
-    mx: float = 1.0
-    step: float = 0.01
-    options: list = field(default_factory=list)
+Property = props_mod.Property          # re-exported: callers used engine.Property
 
 
 @dataclass
 class Wallpaper:
     id: str
     title: str
-    type: str
-    video: bool
+    type: str                  # scene | video | image | web | application
+    video: bool                # carries a video track the renderer must decode
     preview: Path | None
+    folder: Path
+    entry: Path | None = None  # the file the renderer actually opens
+    audio: bool = False        # reacts to system audio
+    tags: list = field(default_factory=list)
+    description: str = ""
+
+    @property
+    def supported(self) -> bool:
+        return self.type in ("scene", "video", "image")
 
 
-def _has_video(folder: Path) -> bool:
-    pkg = folder / "scene.pkg"
-    if not pkg.is_file():
-        return any(folder.glob("*.mp4")) or any(folder.glob("*.webm"))
+_PREVIEW_GLOB = ("preview.gif", "preview.png", "preview.jpg", "preview.jpeg",
+                 "preview.webp", "preview.*")
+
+
+def _preview(folder: Path, named: str) -> Path | None:
+    if named:
+        p = folder / named
+        if p.is_file():
+            return p
+    for pat in _PREVIEW_GLOB:
+        for p in sorted(folder.glob(pat)):
+            if p.is_file():
+                return p
+    return None
+
+
+_VIDEO_EXT = (".mp4", ".webm", ".mkv", ".avi", ".m4v", ".mov")
+_IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+
+
+def _entry_file(folder: Path, meta: dict) -> Path | None:
+    """`project.json`'s own `file` key names the entry point — scene.json,
+    gifscene.json, or the video itself. Trust it; fall back to a scan only when
+    it's missing or points at something that isn't there."""
+    named = str(meta.get("file") or "").strip()
+    if named:
+        p = folder / named
+        if p.is_file():
+            return p
+        # scene.json is the *source*; the shipped bundle is the matching .pkg
+        pkg = folder / (Path(named).stem + ".pkg")
+        if pkg.is_file():
+            return pkg
+    for pat in ("*.pkg", *(f"*{e}" for e in _VIDEO_EXT)):
+        for p in sorted(folder.glob(pat)):
+            return p
+    for e in _IMAGE_EXT:
+        for p in sorted(folder.glob("*" + e)):
+            if "preview" not in p.name.lower():
+                return p
+    return None
+
+
+def read_wallpaper(folder: Path) -> Wallpaper | None:
+    pj = folder / "project.json"
+    if not pj.is_file():
+        return None
     try:
-        return bool(re.search(rb"\.(mp4|webm|mkv)", pkg.open("rb").read(2_000_000), re.I))
-    except OSError:
-        return False
+        meta = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    general = meta.get("general") if isinstance(meta.get("general"), dict) else {}
+    entry = _entry_file(folder, meta)
+    kind = str(meta.get("type") or "").lower() or _infer_type(entry)
+    video = bool(general.get("supportsvideo")) or (
+        entry is not None and entry.suffix.lower() in _VIDEO_EXT)
+    return Wallpaper(
+        id=folder.name,
+        title=str(meta.get("title") or folder.name),
+        type=kind,
+        video=video,
+        preview=_preview(folder, str(meta.get("preview") or "")),
+        folder=folder,
+        entry=entry,
+        audio=bool(general.get("supportsaudioprocessing")),
+        tags=[str(t) for t in (meta.get("tags") or []) if isinstance(t, (str, int))],
+        description=str(meta.get("description") or ""),
+    )
+
+
+def _infer_type(entry: Path | None) -> str:
+    if entry is None:
+        return "unknown"
+    s = entry.suffix.lower()
+    if s in _VIDEO_EXT:
+        return "video"
+    if s in _IMAGE_EXT:
+        return "image"
+    if s == ".html":
+        return "web"
+    return "scene"
 
 
 def scan_library() -> list[Wallpaper]:
-    out = []
-    if not WE_DIR.is_dir():
-        return out
-    for d in sorted(WE_DIR.glob("*/")):
-        pj = d / "project.json"
-        if not pj.is_file():
-            continue
-        try:
-            m = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
-        except ValueError:
-            continue
-        prev = d / m.get("preview", "")
-        out.append(Wallpaper(d.name, m.get("title", d.name), str(m.get("type", "?")).lower(),
-                             _has_video(d), prev if prev.is_file() else None))
-    out.sort(key=lambda w: (w.video, w.title.lower()))
+    """Every wallpaper across every root. The first root to define an id wins,
+    so a local override shadows the Steam copy rather than duplicating it."""
+    out, seen = [], set()
+    for root in library_roots():
+        for d in sorted(root.iterdir()):
+            if not d.is_dir() or d.name in seen:
+                continue
+            wp = read_wallpaper(d)
+            if wp:
+                seen.add(d.name); out.append(wp)
+    out.sort(key=lambda w: (not w.supported, w.video, w.title.lower()))
     return out
 
 
-_PROP_HDR = re.compile(r"^(\w+) - (color|slider|boolean|textinput|combo|scene texture|texture)\s*$")
+def find(wid: str) -> Wallpaper | None:
+    folder = WE_DIR / wid
+    return read_wallpaper(folder) if folder.is_dir() else None
 
 
 def list_properties(wid: str) -> list[Property]:
-    """Parse `--list-properties` into typed Property records for the editor."""
-    try:
-        out = subprocess.run([BIN, "--list-properties", wid], capture_output=True,
-                             text=True, timeout=25).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    props, cur = [], None
-    for line in out.splitlines():
-        h = _PROP_HDR.match(line.strip())
-        if h:
-            kind = "texture" if "texture" in h.group(2) else h.group(2)
-            cur = Property(h.group(1), kind, h.group(1), "")
-            props.append(cur)
-            continue
-        if cur is None:
-            continue
-        s = line.strip()
-        if s.startswith("Text:"):   cur.text = s[5:].strip()
-        elif s.startswith("Value:"): cur.value = s[6:].strip()
-        elif s.startswith("Min:"):   cur.mn = _f(s[4:])
-        elif s.startswith("Max:"):   cur.mx = _f(s[4:])
-        elif s.startswith("Step:"):  cur.step = _f(s[5:]) or 0.01
-        elif s.startswith("Options:"): cur.options = [o.strip() for o in s[8:].split(",") if o.strip()]
-    return props
-
-
-def _f(s):
-    try:
-        return float(s.strip())
-    except ValueError:
-        return 0.0
+    """The wallpaper's own knobs. project.json carries the full schema — types,
+    ranges, combo options, and the `condition` expressions that say when a knob
+    is even relevant — so read it there. Only fall back to asking the renderer
+    for a library that ships no schema."""
+    folder = WE_DIR / wid
+    ps = props_mod.from_project(folder)
+    if ps:
+        return ps
+    return props_mod.from_renderer(BIN, wid) if have_renderer() else []
 
 
 # --------------------------------------------------------------------------- #
@@ -148,7 +230,7 @@ def _f(s):
 # --------------------------------------------------------------------------- #
 def gpu_env(mode: str = "auto") -> dict:
     """EGL vendor env. 'auto' pairs NVIDIA's vendor with the NVIDIA node when the
-    Asus MUX routes eDP to the dGPU (else Mesa mis-drives it → garbage)."""
+    MUX routes the panel to the dGPU (else Mesa mis-drives it → garbage)."""
     if mode == "mesa":
         return {"__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
                 "__GLX_VENDOR_LIBRARY_NAME": "mesa"}
@@ -169,126 +251,308 @@ def _dgpu() -> bool:
         return False
 
 
+# --------------------------------------------------------------------------- #
+#  Outputs
+# --------------------------------------------------------------------------- #
 def outputs() -> list[str]:
+    """Ask the compositor first. DRM connector names and the names a compositor
+    hands to layer-shell can disagree — a MUX switch renames the panel, and
+    `--screen-root` only accepts the compositor's name."""
+    for probe in (_outputs_hypr, _outputs_niri, _outputs_wlr, _outputs_drm):
+        try:
+            got = probe()
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+            continue
+        if got:
+            return got
+    return []
+
+
+def _outputs_hypr() -> list[str]:
+    if not shutil.which("hyprctl"):
+        return []
+    r = subprocess.run(["hyprctl", "-j", "monitors"], capture_output=True, text=True, timeout=5)
+    return [m["name"] for m in json.loads(r.stdout) if m.get("name")]
+
+
+def _outputs_niri() -> list[str]:
+    if not shutil.which("niri"):
+        return []
+    r = subprocess.run(["niri", "msg", "-j", "outputs"], capture_output=True, text=True, timeout=5)
+    data = json.loads(r.stdout)
+    return sorted(data) if isinstance(data, dict) else [o["name"] for o in data]
+
+
+def _outputs_wlr() -> list[str]:
+    if not shutil.which("wlr-randr"):
+        return []
+    r = subprocess.run(["wlr-randr"], capture_output=True, text=True, timeout=5)
+    return [ln.split()[0] for ln in r.stdout.splitlines()
+            if ln and not ln[0].isspace() and ln.split()]
+
+
+def _outputs_drm() -> list[str]:
     return sorted(p.name.split("-", 1)[1] for p in Path("/sys/class/drm").glob("card*-*")
-                  if (p / "status").is_file() and (p / "status").read_text().strip() == "connected")
+                  if (p / "status").is_file()
+                  and (p / "status").read_text().strip() == "connected")
+
+
+def target_outputs(opts: dict) -> list[str]:
+    """Which screens this wallpaper goes on. An empty `output` means all of
+    them — the common case on a laptop, and correct on a multi-head desk."""
+    want = (opts.get("output") or "").strip()
+    live = outputs()
+    if want:
+        return [want]
+    return live or ["eDP-1"]
 
 
 # --------------------------------------------------------------------------- #
-#  The render process
+#  Backend routing
 # --------------------------------------------------------------------------- #
-# Route each wallpaper to whatever actually renders it: mpvpaper for video,
-# swww for stills, linux-wallpaperengine for WE scenes (best-effort).
-_BACKENDS = ("linux-wallpaper", "mpvpaper")     # process comms fossypaper manages
+_MANAGED = ("linux-wallpaper", "mpvpaper")     # process names we own (comm is 15 chars)
 
-
-def _video_file(folder: Path) -> Path | None:
-    for ext in ("*.mp4", "*.webm", "*.mkv"):
-        f = next(iter(sorted(folder.glob(ext))), None)
-        if f:
-            return f
-    return None
-
-
-def _image_file(folder: Path) -> Path | None:
-    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-        for f in sorted(folder.glob(ext)):
-            if "preview" not in f.name.lower():
-                return f
-    return None
+_UNSUPPORTED = {
+    "web": "HTML wallpaper — no Linux renderer runs these, and fossypaper will not "
+           "start a local web server to fake one",
+    "application": "executable wallpaper — a Windows .exe, not something to run here",
+}
 
 
 def backend_of(wid: str) -> tuple[str, bool]:
-    """(backend, installed): how this wallpaper renders + whether its tool exists.
-    mpvpaper=video (solid), swww=image (solid), wpe=WE scene (best-effort)."""
-    folder = WE_DIR / wid
-    if _video_file(folder):
-        return "mpvpaper", bool(shutil.which("mpvpaper"))
-    if (folder / "scene.pkg").is_file():
+    """(backend, usable): how this wallpaper renders, and whether its tool is here.
+
+    mpvpaper=video, swww/mpvpaper=still, wpe=WE scene.
+    """
+    wp = find(wid)
+    if wp is None:
         return "wpe", have_renderer()
-    if _image_file(folder):
-        return "swww", bool(shutil.which("swww"))
+    return backend_for(wp)
+
+
+def backend_for(wp: Wallpaper) -> tuple[str, bool]:
+    if wp.type in _UNSUPPORTED:
+        return wp.type, False
+    if wp.entry is not None and wp.entry.suffix.lower() in _VIDEO_EXT:
+        return "mpvpaper", bool(shutil.which("mpvpaper"))
+    if wp.entry is not None and wp.entry.suffix.lower() == ".pkg":
+        return "wpe", have_renderer()
+    if wp.entry is not None and wp.entry.suffix.lower() in _IMAGE_EXT:
+        be = "swww" if shutil.which("swww") else "mpvpaper"
+        return be, bool(shutil.which(be))
     return "wpe", have_renderer()
 
 
+def wants_audio(wp: Wallpaper, opts: dict) -> bool:
+    """Should the renderer capture and analyse system audio for this wallpaper?
+
+    `auto` — the default — says yes only when the wallpaper's own project.json
+    declares `supportsaudioprocessing`. Most don't, and for those the capture is
+    pure cost: a monitor stream held open for a wallpaper that ignores it.
+    """
+    mode = str(opts.get("audio_processing", "auto")).lower()
+    if mode in ("never", "off", "false"):
+        return False
+    if mode in ("always", "on", "true"):
+        return True
+    return bool(wp.audio)
+
+
+def why_unsupported(wp: Wallpaper) -> str:
+    return _UNSUPPORTED.get(wp.type, "")
+
+
 def backends_status() -> dict:
-    return {"wpe": have_renderer(), "mpvpaper": bool(shutil.which("mpvpaper")),
+    return {"wpe": have_renderer(),
+            "mpvpaper": bool(shutil.which("mpvpaper")),
             "swww": bool(shutil.which("swww"))}
 
 
 def is_running() -> bool:
     return any(subprocess.run(["pgrep", "-x", c], capture_output=True).stdout.strip()
-               for c in _BACKENDS)
+               for c in _MANAGED)
 
 
 def stop():
-    for c in _BACKENDS:
+    for c in _MANAGED:
         subprocess.run(["pkill", "-x", c], capture_output=True)
     if shutil.which("swww"):
         subprocess.run(["swww", "clear"], capture_output=True, timeout=5)
 
 
+# --------------------------------------------------------------------------- #
+#  linux-wallpaperengine
+# --------------------------------------------------------------------------- #
 def build_argv(wid: str, opts: dict) -> list[str]:
-    a = [BIN, "--screen-root", opts.get("output", "eDP-1"), "--bg", wid,
-         "--layer", opts.get("layer", "bottom"), "--fps", str(opts.get("fps", 30))]
-    if opts.get("scaling"):        a += ["--scaling", opts["scaling"]]
-    if opts.get("silent"):         a += ["--silent"]
-    else:                          a += ["--volume", str(opts.get("volume", 15))]
-    if opts.get("no_particles"):   a += ["--disable-particles"]
-    if opts.get("no_parallax"):    a += ["--disable-parallax"]
-    if opts.get("no_mouse"):       a += ["--disable-mouse"]
+    """Every render knob the renderer exposes, in the order it wants them:
+    per-output flags follow the `--screen-root` / `--screen-span` they modify."""
+    a = [BIN]
+    span = [s for s in (opts.get("span") or []) if s]
+    if span:
+        a += ["--screen-span", ",".join(span), "--bg", wid]
+        a += _per_output(opts)
+    else:
+        for out in target_outputs(opts):
+            a += ["--screen-root", out, "--bg", wid]
+            a += _per_output(opts)
+
+    a += ["--layer", opts.get("layer") or "bottom", "--fps", str(opts.get("fps") or 30)]
+
+    if opts.get("silent", True):
+        a += ["--silent"]
+    else:
+        a += ["--volume", str(opts.get("volume", 15))]
+        if opts.get("no_automute"):
+            a += ["--noautomute"]
+    if opts.get("no_audio_processing"):
+        # Audio *processing* is separate from audio output: --silent only mutes.
+        # The capture streams it opens on the sink monitor stay live, pile up on
+        # every reapply, and contend with anything else asking the graph for a
+        # low-latency quantum. Off unless the wallpaper actually reacts to sound.
+        a += ["--no-audio-processing"]
+
+    if opts.get("no_particles"):
+        a += ["--disable-particles"]
+    if opts.get("no_parallax"):
+        a += ["--disable-parallax"]
+    if opts.get("no_mouse"):
+        a += ["--disable-mouse"]
+
+    # Leaving a scene rendering behind a fullscreen game costs frames the game
+    # wants. Pausing is the default; these switches loosen it.
+    if not opts.get("fullscreen_pause", True):
+        a += ["--no-fullscreen-pause"]
+    elif opts.get("pause_only_active"):
+        a += ["--fullscreen-pause-only-active"]
+    for appid in (opts.get("pause_ignore_appids") or []):
+        if appid:
+            a += ["--fullscreen-pause-ignore-appid", str(appid)]
+
+    if opts.get("assets_dir"):
+        a += ["--assets-dir", str(opts["assets_dir"])]
+
     for k, v in (opts.get("properties") or {}).items():
         a += ["--set-property", f"{k}={v}"]
     return a
 
 
-def start(wid: str, opts: dict):
-    """Apply a wallpaper via the right backend for its kind."""
+def _per_output(opts: dict) -> list[str]:
+    """--scaling and --clamp bind to the screen named just before them."""
+    a = []
+    if opts.get("scaling"):
+        a += ["--scaling", opts["scaling"]]
+    if opts.get("clamp"):
+        a += ["--clamp", opts["clamp"]]
+    return a
+
+
+# --------------------------------------------------------------------------- #
+#  Applying
+# --------------------------------------------------------------------------- #
+def start(wid: str, opts: dict) -> tuple[bool, str]:
+    """Apply a wallpaper through whichever backend can render it."""
+    wp = find(wid)
+    if wp is None:
+        return False, f"no wallpaper with id {wid} in any library root"
+    be, ok = backend_for(wp)
+    if be in _UNSUPPORTED:
+        return False, _UNSUPPORTED[be]
+    if not ok:
+        return False, f"this one renders via {be}, which isn't installed — paru -S {be}"
     stop()
-    folder = WE_DIR / wid
-    vf = _video_file(folder)
-    if vf and shutil.which("mpvpaper"):
-        return _start_mpvpaper(vf, opts)
-    imgf = None if (folder / "scene.pkg").is_file() else _image_file(folder)
-    if imgf and shutil.which("swww"):
-        return _start_swww(imgf, opts)
-    return _start_wpe(wid, opts)
+    opts = {**opts, "no_audio_processing": not wants_audio(wp, opts)}
+    try:
+        {"mpvpaper": _start_mpvpaper, "swww": _start_swww, "wpe": _start_wpe}[be](wp, opts)
+    except OSError as e:
+        return False, f"{be} wouldn't start: {e}"
+    return True, f"applied via {be}"
 
 
-def _start_wpe(wid: str, opts: dict):
+def _spawn(argv, env=None):
+    subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def _start_wpe(wp: Wallpaper, opts: dict):
     env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
-    subprocess.Popen(build_argv(wid, opts), env=env,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
+    env.setdefault("WALLPAPER_ENGINE_ASSETS", str(opts.get("assets_dir") or ""))
+    _spawn(build_argv(wp.id, opts), env)
 
 
-def _start_mpvpaper(video: Path, opts: dict):
+def _start_mpvpaper(wp: Wallpaper, opts: dict):
+    """Video, and stills too when swww isn't installed — mpv holds a single
+    frame perfectly well, and that beats taking a dependency for it."""
     env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
-    mo = ["loop-file=inf", "hwdec=auto", "vo=gpu",
-          "no-audio" if opts.get("silent", True) else f"volume={opts.get('volume', 15)}"]
-    subprocess.Popen(["mpvpaper", "-o", " ".join(mo), opts.get("output", "eDP-1"), str(video)],
-                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
+    still = wp.entry is not None and wp.entry.suffix.lower() in _IMAGE_EXT
+    mo = ["loop-file=inf", "hwdec=auto-safe", "vo=gpu", "profile=low-latency",
+          f"video-sync={'display-resample' if not still else 'audio'}"]
+    if still:
+        mo = ["loop-file=inf", "vo=gpu", "image-display-duration=inf", "no-audio"]
+    elif opts.get("silent", True):
+        mo.append("no-audio")
+    else:
+        mo.append(f"volume={opts.get('volume', 15)}")
+    if opts.get("fps"):
+        mo.append(f"override-display-fps={opts['fps']}")
+
+    base = ["mpvpaper", "-l", opts.get("layer") or "bottom", "-o", " ".join(mo)]
+    if opts.get("fullscreen_pause", True):
+        # -p pauses seamlessly; -a FULL extends that to any fullscreen window.
+        base = base[:1] + ["-p", "-a", "FULL"] + base[1:]
+    for out in target_outputs(opts):
+        _spawn(base + [out, str(wp.entry)], env)
 
 
-def _start_swww(image: Path, opts: dict):
-    import time
+def _start_swww(wp: Wallpaper, opts: dict):
     if subprocess.run(["pgrep", "-x", "swww-daemon"], capture_output=True).returncode != 0:
-        subprocess.Popen(["swww-daemon"], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+        _spawn(["swww-daemon"])
         time.sleep(0.6)
-    subprocess.run(["swww", "img", "--outputs", opts.get("output", "eDP-1"),
-                    "--transition-type", "fade", str(image)], capture_output=True)
+    fit = {"fill": "fill", "fit": "fit", "stretch": "stretch",
+           "default": "crop", "": "crop"}.get(opts.get("scaling", ""), "crop")
+    subprocess.run(["swww", "img", "--outputs", ",".join(target_outputs(opts)),
+                    "--resize", fit, "--transition-type", "fade", str(wp.entry)],
+                   capture_output=True)
 
 
 def screenshot(wid: str, out: Path, opts: dict) -> bool:
-    """Render one frame to a PNG (for palette extraction / previews)."""
-    env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
+    """Render one frame to a PNG (palette extraction, SDDM stills, previews).
+
+    Only scenes can be rendered this way; for video and stills the source file
+    already *is* a frame, so take it from there instead of spinning up GL.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wp = find(wid)
+    if wp is not None and wp.entry is not None:
+        suffix = wp.entry.suffix.lower()
+        if suffix in _IMAGE_EXT:
+            return _still_from_image(wp.entry, out)
+        if suffix in _VIDEO_EXT and shutil.which("ffmpeg"):
+            r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1",
+                                "-i", str(wp.entry), "-frames:v", "1", str(out)],
+                               capture_output=True, timeout=60)
+            if out.is_file() and r.returncode == 0:
+                return True
+    if have_renderer():
+        env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
+        try:
+            subprocess.run([BIN, "--screenshot", str(out), "--screenshot-delay", "90",
+                            "--silent", wid], env=env, capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if out.is_file():
+            return True
+    # Last resort: the wallpaper's own preview is a fair likeness of its palette.
+    if wp is not None and wp.preview is not None:
+        return _still_from_image(wp.preview, out)
+    return False
+
+
+def _still_from_image(src: Path, out: Path) -> bool:
     try:
-        subprocess.run([BIN, "--screenshot", str(out), "--screenshot-delay", "90",
-                        "--silent", wid], env=env, capture_output=True, timeout=40)
-        return out.is_file()
-    except (OSError, subprocess.SubprocessError):
+        from PIL import Image
+        Image.open(src).convert("RGB").save(out)
+        return True
+    except Exception:
         return False
 
 
@@ -296,50 +560,46 @@ def screenshot(wid: str, out: Path, opts: dict) -> bool:
 #  Theme sync — palette out to shells/compositors
 # --------------------------------------------------------------------------- #
 def theme_backends() -> list[str]:
-    return [t for t in ("matugen", "wallust", "wal") if shutil.which(t)]
+    return ["builtin"] + [t for t in ("matugen", "wallust", "wal") if shutil.which(t)]
 
 
-def sync_theme(wid: str, opts: dict, backend: str = "auto") -> tuple[bool, str]:
-    """Grab a frame of the wallpaper and hand it to a palette generator, which
-    themes the shells/apps the user has templates for."""
+def sync_theme(wid: str, opts: dict, backend: str = "builtin") -> tuple[bool, str]:
     STATE.mkdir(parents=True, exist_ok=True)
     frame = STATE / "current-frame.png"
     if not screenshot(wid, frame, opts):
-        return False, "couldn't render a frame to theme from"
+        return False, "couldn't produce a frame to theme from"
     avail = theme_backends()
-    if backend == "auto":
-        backend = avail[0] if avail else ""
-    if not backend:
-        return False, ("no palette generator found — install one of: matugen, wallust, "
-                       "or python-pywal (then fossypaper themes your shells from the wallpaper)")
+    if backend in ("", "auto"):
+        backend = avail[-1]
+    if backend not in avail:
+        return False, (f"{backend} isn't installed — available: {', '.join(avail)}")
     if backend == "builtin":
         pal = extract_palette(frame)
         write_palette_files(pal)
-        return True, f"extracted {len(pal)} colours → {STATE}/colors.* (wire your shells to these)"
+        return True, f"extracted {len(pal)} colours → {STATE}/colors.*"
     cmds = {"matugen": ["matugen", "image", str(frame)],
             "wallust": ["wallust", "run", str(frame)],
             "wal": ["wal", "-i", str(frame), "-n"]}
     try:
-        r = subprocess.run(cmds[backend], capture_output=True, text=True, timeout=60)
-        return (r.returncode == 0), (f"themed via {backend}" if r.returncode == 0
-                                     else f"{backend} failed: {r.stderr.strip()[:200]}")
-    except (OSError, subprocess.SubprocessError, KeyError) as e:
+        r = subprocess.run(cmds[backend], capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.SubprocessError) as e:
         return False, f"theme sync error: {e}"
+    if r.returncode != 0:
+        return False, f"{backend} failed: {r.stderr.strip()[:200]}"
+    write_palette_files(extract_palette(frame))    # keep our own files current too
+    return True, f"themed via {backend}"
 
 
-# --------------------------------------------------------------------------- #
-#  Built-in palette extraction (no external tool needed) — reads the pixels
-# --------------------------------------------------------------------------- #
 def extract_palette(png: Path, n: int = 8) -> list[str]:
-    """Cluster the wallpaper's own pixels into n dominant colours (hex), ordered
-    most-common first. Pure PIL — no matugen/pywal required."""
+    """Cluster the wallpaper's own pixels into n dominant colours, most-common
+    first. Pure PIL — no matugen/pywal required."""
     from PIL import Image
     img = Image.open(png).convert("RGB")
     img.thumbnail((200, 200))
     q = img.quantize(colors=n, method=Image.Quantize.FASTOCTREE)
     pal = q.getpalette() or []
     hexes = []
-    for count, idx in sorted(q.getcolors() or [], reverse=True):
+    for _count, idx in sorted(q.getcolors() or [], reverse=True):
         r, g, b = pal[idx * 3:idx * 3 + 3]
         hexes.append(f"#{r:02x}{g:02x}{b:02x}")
     return hexes or ["#000000"]
@@ -357,23 +617,16 @@ def _sat(hx: str) -> float:
 
 
 def derive_roles(pal: list[str]) -> dict:
-    """Pick semantic roles from the palette: background, foreground, accent."""
     by_lum = sorted(pal, key=_lum)
-    return {
-        "background": by_lum[0],
-        "foreground": by_lum[-1],
-        "accent": max(pal, key=_sat),
-        "palette": pal,
-    }
+    return {"background": by_lum[0], "foreground": by_lum[-1],
+            "accent": max(pal, key=_sat), "palette": pal}
 
 
 def write_palette_files(pal: list[str]) -> None:
-    """Emit the palette in a few shell-friendly formats under the state dir, so
-    any shell/compositor can source it (colors.sh), read it (colors.json), or
-    include it as CSS (colors.css). pywal-compatible names too."""
+    """Emit the palette so any shell can source it (colors.sh), read it
+    (colors.json) or include it (colors.css). pywal-compatible names too."""
     STATE.mkdir(parents=True, exist_ok=True)
     roles = derive_roles(pal)
-    # pad to 16 like a terminal palette
     cols = (pal * 16)[:16]
     (STATE / "colors.json").write_text(json.dumps(
         {"special": {"background": roles["background"], "foreground": roles["foreground"],
@@ -385,9 +638,17 @@ def write_palette_files(pal: list[str]) -> None:
         f"foreground='{roles['foreground']}'\naccent='{roles['accent']}'\n"
         + "".join(f"color{i}='{c}'\n" for i, c in enumerate(cols)))
     (STATE / "colors.css").write_text(
-        ":root{\n" + f"  --background:{roles['background']};\n  --foreground:{roles['foreground']};\n"
-        f"  --accent:{roles['accent']};\n"
+        ":root{\n" + f"  --background:{roles['background']};\n"
+        f"  --foreground:{roles['foreground']};\n  --accent:{roles['accent']};\n"
         + "".join(f"  --color{i}:{c};\n" for i, c in enumerate(cols)) + "}\n")
+
+
+def palette() -> list[str]:
+    """The palette from the last theme sync, if there is one."""
+    try:
+        return json.loads((STATE / "colors.json").read_text())["roles"]["palette"]
+    except (OSError, ValueError, KeyError):
+        return []
 
 
 # --------------------------------------------------------------------------- #
@@ -397,8 +658,7 @@ SERVICE = Path.home() / ".config/systemd/user/fossypaper.service"
 
 
 def ensure_wayland_env() -> None:
-    """A login service may start before the compositor exported WAYLAND_DISPLAY.
-    Point it at the first wayland socket in the runtime dir if it's unset."""
+    """A login service can start before the compositor exported WAYLAND_DISPLAY."""
     if os.environ.get("WAYLAND_DISPLAY"):
         return
     rt = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
@@ -409,22 +669,20 @@ def ensure_wayland_env() -> None:
             return
 
 
-def apply_current() -> bool:
+def apply_current() -> tuple[bool, str]:
     """Restore the saved wallpaper — the login daemon's job."""
     from . import config
     ensure_wayland_env()
     cfg = config.load()
     wid = cfg.get("current")
-    if not wid or not (WE_DIR / wid).is_dir():
-        return False
+    if not wid:
+        return False, "nothing saved to restore"
     o = config.opts(cfg)
     o["properties"] = cfg.get("properties", {}).get(wid, {})
-    start(wid, o)
-    return True
+    return start(wid, o)
 
 
 def install_service() -> Path:
-    """Enable a systemd --user unit that restores the wallpaper each login."""
     SERVICE.parent.mkdir(parents=True, exist_ok=True)
     exe = shutil.which("fossypaper") or str(Path.home() / ".local/bin/fossypaper")
     SERVICE.write_text(
@@ -439,30 +697,22 @@ def install_service() -> Path:
 
 
 def remove_service() -> None:
-    subprocess.run(["systemctl", "--user", "disable", "--now", "fossypaper.service"], capture_output=True)
-    if SERVICE.exists():
-        SERVICE.unlink()
+    subprocess.run(["systemctl", "--user", "disable", "--now", "fossypaper.service"],
+                   capture_output=True)
+    SERVICE.unlink(missing_ok=True)
     subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
 
 
+_SDDM_DEST = "/usr/share/sddm/themes/fossypaper-bg.png"
+
+
 def sddm_prepare(wid: str, opts: dict) -> tuple[bool, str, dict]:
-    """Render a still of the wallpaper for the SDDM login background and stage a
-    drop-in. SDDM is system-level (needs root), so we render + hand back the
-    exact install commands rather than touching /usr ourselves."""
+    """Render a still for the SDDM login background and stage a drop-in. SDDM is
+    system-level, so hand back the exact root commands rather than touching /usr."""
     STATE.mkdir(parents=True, exist_ok=True)
     still = STATE / "sddm-background.png"
     if not screenshot(wid, still, opts):
-        # fall back to the wallpaper's own preview if the live render fails
-        from . import config  # noqa
-        prev = next(iter((WE_DIR / wid).glob("preview.*")), None)
-        if prev:
-            try:
-                from PIL import Image
-                Image.open(prev).convert("RGB").save(still)
-            except Exception:
-                return False, "couldn't produce a still image", {}
-        else:
-            return False, "couldn't produce a still image", {}
+        return False, "couldn't produce a still image", {}
     conf = STATE / "sddm-fossypaper.conf"
     conf.write_text("[Theme]\n# point your SDDM theme's background at the still below,\n"
                     "# or use a theme that honours [General] background=\n"
@@ -471,6 +721,3 @@ def sddm_prepare(wid: str, opts: dict) -> tuple[bool, str, dict]:
         "still": str(still), "conf": str(conf),
         "install": [f"sudo install -Dm644 {still} {_SDDM_DEST}",
                     f"sudo install -Dm644 {conf} /etc/sddm.conf.d/10-fossypaper.conf"]}
-
-
-_SDDM_DEST = "/usr/share/sddm/themes/fossypaper-bg.png"
