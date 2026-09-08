@@ -1,0 +1,17 @@
+{
+  "settings.binary.label": "fossypaper command",
+  "settings.binary.description": "Name or full path of the fossypaper CLI.",
+  "settings.sync_theme.label": "Sync colours on apply",
+  "settings.sync_theme.description": "After applying a wallpaper, read a palette out of its pixels.",
+  "settings.release.label": "Release Noctalia's wallpaper",
+  "settings.release.description": "Turn off Noctalia's own wallpaper surface while fossypaper is driving, so the two do not stack.",
+  "settings.thumbs.label": "Show thumbnails",
+  "settings.thumbs.description": "Bake a still of each preview and show it in the panel. Costs a little disk.",
+  "settings.show_title.label": "Show the title",
+  "settings.show_title.description": "Put the current wallpaper's name next to the glyph.",
+  "settings.max_length.label": "Title length",
+  "settings.max_length.description": "Characters before the title is cut short.",
+  "title": "fossypaper",
+  "stopped": "no wallpaper",
+  "missing": "fossypaper not found"
+}

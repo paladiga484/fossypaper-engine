@@ -1,13 +1,19 @@
 [project]
 name = "fossypaper-engine"
-version = "0.1.0"
-description = "A FOSS Wallpaper Engine manager — CLI, TUI (lazypaper) and Qt GUI, with more knobs than the original."
+version = "0.2.0"
+description = "A wallpaper manager for Wayland — Wallpaper Engine scenes, video and stills, with a browser and per-wallpaper controls."
 requires-python = ">=3.10"
 dependencies = ["PySide6", "Pillow"]
 
 [project.scripts]
 fossypaper = "fossypaper.cli:main"
 lazypaper = "fossypaper.tui:main"
+
+[tool.setuptools]
+packages = ["fossypaper"]
+
+[tool.setuptools.package-data]
+fossypaper = ["docs/*.md"]
 
 [build-system]
 requires = ["setuptools>=64"]

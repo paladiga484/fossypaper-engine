@@ -1,0 +1,30 @@
+[Desktop Entry]
+Type=Application
+Name=fossypaper
+GenericName=Wallpaper Manager
+Comment=Wallpaper Engine scenes, video and stills on Wayland — with a browser and per-wallpaper controls
+Exec=fossypaper gui
+TryExec=fossypaper
+Icon=fossypaper
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=wallpaper;wallpaperengine;scene;workshop;wallhaven;theme;background;
+StartupNotify=true
+StartupWMClass=fossypaper
+Actions=Off;Toggle;Browse;Theme;
+
+[Desktop Action Off]
+Name=Turn the wallpaper off
+Exec=fossypaper off
+
+[Desktop Action Toggle]
+Name=Toggle the wallpaper
+Exec=fossypaper toggle
+
+[Desktop Action Browse]
+Name=Browse Wallhaven and the Workshop
+Exec=fossypaper gui
+
+[Desktop Action Theme]
+Name=Sync colours from the wallpaper
+Exec=fossypaper theme

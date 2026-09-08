@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=lazypaper
+GenericName=Wallpaper Manager (terminal)
+Comment=fossypaper's terminal side — library, property editor, and a wallpaper browser
+Exec=lazypaper
+TryExec=lazypaper
+Icon=lazypaper
+Terminal=true
+Categories=Settings;DesktopSettings;ConsoleOnly;
+Keywords=wallpaper;wallpaperengine;tui;terminal;workshop;wallhaven;
+StartupNotify=false

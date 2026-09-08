@@ -23,19 +23,23 @@ def _emit(obj, as_json: bool, pretty):
         pretty()
 
 
-def _wp_dict(w) -> dict:
+def _wp_dict(w, thumbs=False) -> dict:
     be, ok = engine.backend_for(w)
-    return {"id": w.id, "title": w.title, "type": w.type, "backend": be,
-            "usable": ok, "video": w.video, "audio": w.audio,
-            "preview": str(w.preview) if w.preview else "",
-            "folder": str(w.folder),
-            "reason": engine.why_unsupported(w)}
+    d = {"id": w.id, "title": w.title, "type": w.type, "backend": be,
+         "usable": ok, "video": w.video, "audio": w.audio,
+         "preview": str(w.preview) if w.preview else "",
+         "folder": str(w.folder),
+         "reason": engine.why_unsupported(w)}
+    if thumbs:
+        t = engine.thumbnail(w.id)
+        d["thumb"] = str(t) if t else ""
+    return d
 
 
 # --------------------------------------------------------------------------- #
 def cmd_list(a):
     lib = engine.scan_library()
-    rows = [_wp_dict(w) for w in lib]
+    rows = [_wp_dict(w, a.thumbs) for w in lib]
     if a.usable_only:
         rows = [r for r in rows if r["usable"]]
     if a.type:
@@ -299,9 +303,18 @@ def cmd_doctor(a):
 
 def cmd_privacy(a):
     from pathlib import Path
-    doc = Path(__file__).resolve().parent.parent / "docs" / ("TERMS.md" if a.terms else "PRIVACY.md")
-    print(doc.read_text() if doc.is_file() else f"missing: {doc}")
-    return 0
+    name = "TERMS.md" if a.terms else "PRIVACY.md"
+    here = Path(__file__).resolve().parent
+    for base in (here.parent / "docs", here / "docs", Path("/usr/share/doc/fossypaper")):
+        doc = base / name
+        if doc.is_file():
+            print(doc.read_text())
+            return 0
+    print(f"{name} isn't installed alongside this copy. It lives in the "
+          "repository under docs/, and the short version is: fossypaper opens "
+          "no listening socket, sends nothing anywhere unless you use the "
+          "browser, and has no telemetry.")
+    return 1
 
 
 def cmd_gui(a):
@@ -327,6 +340,8 @@ def build_parser():
     s.add_argument("--usable-only", action="store_true", help="only what can render here")
     s.add_argument("--type", help="scene | video | image | web")
     s.add_argument("--search", help="filter by title or id")
+    s.add_argument("--thumbs", action="store_true",
+                   help="also bake a plain PNG of each preview and report its path")
     s.set_defaults(fn=cmd_list)
 
     s = sub.add_parser("apply", help="apply a wallpaper"); s.add_argument("id"); s.set_defaults(fn=cmd_apply)

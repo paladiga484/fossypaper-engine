@@ -1,0 +1,96 @@
+# fossypaper for Noctalia.
+#
+# Every entry here talks to the `fossypaper` CLI and nothing else: argv-form
+# runAsync, JSON on stdout. No socket, no port, no helper daemon — the shell
+# and the wallpaper manager share a config file and a command line, which is
+# all they need.
+#
+#   noctalia msg panel-toggle friend/fossypaper:library
+#   type `/wp <name>` in the launcher
+
+id           = "friend/fossypaper"
+name         = "fossypaper"
+version      = "1.0.0"
+plugin_api   = 24
+author       = "friend"
+license      = "MIT"
+icon         = "photo"
+description  = "Browse and apply your Wallpaper Engine library from the bar, a panel, or the launcher."
+tags         = ["wallpaper", "wallpaper-engine", "theme"]
+dependencies = ["fossypaper-engine", "linux-wallpaperengine"]
+
+# --- shared settings, edited in Settings -> Plugins ------------------------ #
+[[setting]]
+key = "binary"
+type = "string"
+label_key = "settings.binary.label"
+description_key = "settings.binary.description"
+default = "fossypaper"
+
+[[setting]]
+key = "sync_theme"
+type = "bool"
+label_key = "settings.sync_theme.label"
+description_key = "settings.sync_theme.description"
+default = false
+
+[[setting]]
+key = "release_noctalia_wallpaper"
+type = "bool"
+label_key = "settings.release.label"
+description_key = "settings.release.description"
+default = true
+
+[[setting]]
+key = "show_thumbnails"
+type = "bool"
+label_key = "settings.thumbs.label"
+description_key = "settings.thumbs.description"
+default = true
+
+# --- bar widget ------------------------------------------------------------ #
+[[widget]]
+id    = "status"
+entry = "widget.luau"
+
+  [widget.actions]
+  middle = "none"
+
+  [[widget.setting]]
+  key = "show_title"
+  type = "bool"
+  label_key = "settings.show_title.label"
+  description_key = "settings.show_title.description"
+  default = true
+
+  [[widget.setting]]
+  key = "max_length"
+  type = "int"
+  label_key = "settings.max_length.label"
+  description_key = "settings.max_length.description"
+  default = 18
+  min = 4
+  max = 60
+
+# --- panel ----------------------------------------------------------------- #
+[[panel]]
+id        = "library"
+entry     = "panel.luau"
+width     = 520
+height    = 620
+placement = "floating"
+position  = "center"
+
+# --- control-center tile --------------------------------------------------- #
+[[shortcut]]
+id    = "toggle"
+entry = "shortcut.luau"
+
+# --- launcher provider ----------------------------------------------------- #
+[[launcher_provider]]
+id     = "find"
+entry  = "launcher.luau"
+prefix = "wp"
+glyph  = "photo"
+include_in_global_search = false
+debounce_ms = 120

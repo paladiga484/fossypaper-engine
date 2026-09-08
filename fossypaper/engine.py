@@ -37,13 +37,15 @@ OWN_LIBRARY = Path.home() / ".local/share/fossypaper/wallpapers"
 
 
 def library_roots() -> list[Path]:
-    """Every folder we look in, most-specific first. `FOSSYPAPER_LIBRARY` may
-    name several, colon-separated, like a PATH."""
-    roots: list[Path] = []
-    for part in (os.environ.get("FOSSYPAPER_LIBRARY") or "").split(":"):
-        if part.strip():
-            roots.append(Path(part.strip()).expanduser())
-    roots += [STEAM_WORKSHOP, FLATPAK_WORKSHOP, OWN_LIBRARY]
+    """Every folder we look in, most-specific first.
+
+    `FOSSYPAPER_LIBRARY` *replaces* the defaults rather than adding to them —
+    "not tied to Steam" has to mean you can point fossypaper somewhere else and
+    get only that. It may name several roots, colon-separated, like a PATH.
+    """
+    override = [Path(p.strip()).expanduser()
+                for p in (os.environ.get("FOSSYPAPER_LIBRARY") or "").split(":") if p.strip()]
+    roots = override or [STEAM_WORKSHOP, FLATPAK_WORKSHOP, OWN_LIBRARY]
     seen, out = set(), []
     for r in roots:
         if r not in seen and r.is_dir():
@@ -545,6 +547,38 @@ def screenshot(wid: str, out: Path, opts: dict) -> bool:
     if wp is not None and wp.preview is not None:
         return _still_from_image(wp.preview, out)
     return False
+
+
+THUMBS = Path.home() / ".cache/fossypaper/library"
+
+
+def thumbnail(wid: str, width: int = 240) -> Path | None:
+    """A plain PNG of a wallpaper's preview, cached.
+
+    Previews in a Workshop library are mostly animated GIFs. Anything that just
+    wants to *show* one — the Noctalia panel, a launcher row — wants a still in
+    a format everything reads, so bake one once and hand back the path.
+    """
+    wp = find(wid)
+    if wp is None or wp.preview is None:
+        return None
+    dest = THUMBS / f"{wid}-{width}.png"
+    try:
+        if dest.is_file() and dest.stat().st_mtime >= wp.preview.stat().st_mtime:
+            return dest
+    except OSError:
+        pass
+    try:
+        from PIL import Image
+        THUMBS.mkdir(parents=True, exist_ok=True)
+        img = Image.open(wp.preview)
+        img.seek(0)                      # first frame of an animation
+        img = img.convert("RGB")
+        img.thumbnail((width, width), Image.LANCZOS)
+        img.save(dest)
+    except Exception:
+        return None
+    return dest
 
 
 def _still_from_image(src: Path, out: Path) -> bool:
