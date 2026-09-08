@@ -489,13 +489,13 @@ def _start_mpvpaper(wp: Wallpaper, opts: dict):
     mo = ["loop-file=inf", "hwdec=auto-safe", "vo=gpu", "profile=low-latency",
           f"video-sync={'display-resample' if not still else 'audio'}"]
     if still:
+        # one frame, held. An fps cap on a static image only costs wakeups.
         mo = ["loop-file=inf", "vo=gpu", "image-display-duration=inf", "no-audio"]
-    elif opts.get("silent", True):
-        mo.append("no-audio")
     else:
-        mo.append(f"volume={opts.get('volume', 15)}")
-    if opts.get("fps"):
-        mo.append(f"override-display-fps={opts['fps']}")
+        mo.append("no-audio" if opts.get("silent", True)
+                  else f"volume={opts.get('volume', 15)}")
+        if opts.get("fps"):
+            mo.append(f"override-display-fps={opts['fps']}")
 
     base = ["mpvpaper", "-l", opts.get("layer") or "bottom", "-o", " ".join(mo)]
     if opts.get("fullscreen_pause", True):

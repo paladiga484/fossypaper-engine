@@ -22,6 +22,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,13 +31,18 @@ from pathlib import Path
 
 from . import config
 
-UA = "fossypaper-engine/0.2 (+local; no telemetry)"
+# Wallhaven sits behind Cloudflare, which answers 502 to a User-Agent that
+# doesn't look like a browser — so this is shaped like one while still naming
+# the program honestly. It carries no identifier of any kind. docs/PRIVACY.md
+# quotes it verbatim; keep the two in step.
+UA = "Mozilla/5.0 (X11; Linux x86_64) fossypaper-engine/0.2"
 TIMEOUT = 20
 
 CACHE = Path.home() / ".cache/fossypaper/thumbs"
 DOWNLOADS = Path.home() / ".local/share/fossypaper/wallpapers"
 
 WALLHAVEN_API = "https://wallhaven.cc/api/v1/search"
+WALLHAVEN_ONE = "https://wallhaven.cc/api/v1/w/"
 WORKSHOP_BROWSE = "https://steamcommunity.com/workshop/browse/"
 WORKSHOP_DETAILS = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
 WE_APPID = 431960
@@ -70,20 +76,35 @@ class SourceError(RuntimeError):
 # --------------------------------------------------------------------------- #
 #  Transport
 # --------------------------------------------------------------------------- #
-def _get(url: str, data: bytes | None = None, timeout: int = TIMEOUT) -> bytes:
+def _get(url: str, data: bytes | None = None, timeout: int = TIMEOUT,
+         retries: int = 1) -> bytes:
+    """One HTTPS GET (or POST, with `data`).
+
+    Wallhaven's edge answers 502 now and then under no particular provocation,
+    so a 5xx is retried once after a short pause. A 4xx is not — that one means
+    what it says.
+    """
     if not url.startswith("https://"):
         raise SourceError("refusing a non-HTTPS request")
-    req = urllib.request.Request(url, data=data, headers={"User-Agent": UA})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read()
-    except urllib.error.HTTPError as e:
-        host = urllib.parse.urlsplit(url).netloc
-        if e.code == 429:
-            raise SourceError(f"{host} is rate-limiting us — wait a minute") from e
-        raise SourceError(f"{host} said {e.code}") from e
-    except (urllib.error.URLError, OSError, TimeoutError) as e:
-        raise SourceError(f"network error: {getattr(e, 'reason', e)}") from e
+    host = urllib.parse.urlsplit(url).netloc
+    last = ""
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=data, headers={"User-Agent": UA})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                raise SourceError(f"{host} is rate-limiting us — wait a minute") from e
+            if e.code < 500 or attempt == retries:
+                raise SourceError(f"{host} said {e.code}") from e
+            last = f"{host} said {e.code}"
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            if attempt == retries:
+                raise SourceError(f"network error: {getattr(e, 'reason', e)}") from e
+            last = f"network error: {getattr(e, 'reason', e)}"
+        time.sleep(1.5)
+    raise SourceError(last or "request failed")
 
 
 def thumbnail(url: str) -> Path | None:
@@ -153,6 +174,22 @@ def wallhaven(query: str = "", page: int = 1, sorting: str = "",
                  f"{w.get('views', 0)} views",
             kind="image", page_url=w.get("url", "")))
     return rows, int((raw.get("meta") or {}).get("last_page", 1))
+
+
+def wallhaven_one(wid: str) -> Listing | None:
+    """One wallpaper by its Wallhaven id. The search endpoint has no id filter,
+    so guessing the file extension would be the alternative — this asks."""
+    raw = json.loads(_get(WALLHAVEN_ONE + urllib.parse.quote(wid)))
+    w = raw.get("data")
+    if not isinstance(w, dict) or not w.get("path"):
+        return None
+    return Listing(
+        source="wallhaven", id=str(w.get("id", wid)),
+        title=f"{w.get('resolution', '?')} · {w.get('category', '')}",
+        thumb_url=(w.get("thumbs") or {}).get("small", ""),
+        full_url=w["path"],
+        meta=f"{w.get('resolution', '?')}  {_size(w.get('file_size', 0))}",
+        kind="image", page_url=w.get("url", ""))
 
 
 def fetch_wallhaven(row: Listing) -> tuple[bool, str]:

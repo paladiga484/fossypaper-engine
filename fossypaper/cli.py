@@ -11,9 +11,6 @@ import sys
 
 from . import config, engine, properties, sources
 
-KIND_TAG = {"wpe": "scene", "mpvpaper": "video", "swww": "image"}
-
-
 def _emit(obj, as_json: bool, pretty):
     if as_json:
         json.dump(obj, sys.stdout, indent=None if getattr(sys.stdout, "isatty", lambda: False)()
@@ -46,7 +43,7 @@ def cmd_list(a):
         rows = [r for r in rows if r["type"] == a.type]
     if a.search:
         q = a.search.lower()
-        rows = [r for r in rows if q in r["title"].lower() or q == r["id"]]
+        rows = [r for r in rows if q in r["title"].lower() or q in r["id"].lower()]
     cur = config.load().get("current", "")
 
     def pretty():
@@ -55,9 +52,9 @@ def cmd_list(a):
             return
         for r in rows:
             mark = "*" if r["id"] == cur else " "
-            state = KIND_TAG.get(r["backend"], r["backend"])
-            if not r["usable"]:
-                state = "need " + r["backend"]
+            # what it *is*, not what happens to render it — a still routed
+            # through mpvpaper is still a still
+            state = r["type"] if r["usable"] else "need " + r["backend"]
             print(f"{mark} {state:11} {r['id']:12} {r['title']}")
         print(f"\n{len(rows)} wallpaper(s) · roots: {engine.WE_DIR}")
     _emit(rows, a.json, pretty)
@@ -209,11 +206,10 @@ def cmd_get(a):
             if row is None:
                 print("! that item isn't a Wallpaper Engine wallpaper"); return 1
         else:
-            rows, _ = sources.wallhaven(f"id:{a.id}", 1)
-            row = next((r for r in rows if r.id == a.id), None)
+            row = sources.wallhaven_one(a.id)
             if row is None:
-                row = sources.Listing("wallhaven", a.id, a.id, "",
-                                      f"https://w.wallhaven.cc/full/{a.id[:2]}/wallhaven-{a.id}.jpg")
+                print("! no Wallhaven wallpaper with id", a.id)
+                return 1
         ok, msg = sources.fetch(row)
     except sources.SourceError as e:
         ok, msg = False, str(e)

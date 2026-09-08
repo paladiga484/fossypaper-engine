@@ -35,10 +35,12 @@ LOGO = [
     r"                   |___/           |_|             ",
 ]
 LOGO_SMALL = [
-    r" |  _  _   |) _  _  _  _",
-    r" | (_|/_\/ |'(_||_)(/_|",
-    r"        _/         |    ",
+    r" _                                        ",
+    r"| |__ _ ____  _ _ __  __ _ _ __  ___ _ _  ",
+    r"| / _` |_  / || | '_ \/ _` | '_ \/ -_) '_|",
+    r"|_\__,_/___|\_, | .__/\__,_| .__/\___|_|  ",
 ]
+LOGO_TINY = ["lazypaper"]
 
 FPS_CYCLE = [30, 60, 24, 45, 90, 120, 144]
 LAYER_CYCLE = ["bottom", "background", "top"]
@@ -180,10 +182,10 @@ class State:
 #  Drawing
 # --------------------------------------------------------------------------- #
 def _header(scr, st, W):
-    logo = LOGO if W >= 92 else LOGO_SMALL
+    logo = LOGO if W >= 92 else LOGO_SMALL if W >= 70 else LOGO_TINY
     for i, ln in enumerate(logo):
         _put(scr, i, 1, ln, A(ACCENT))
-    bx = (len(logo[0]) if logo is LOGO_SMALL else 52) + 3
+    bx = max(len(ln) for ln in logo) + 4
     if W - bx < 24:
         return len(logo)
     b = engine.backends_status()
@@ -203,7 +205,9 @@ def _header(scr, st, W):
         _put(scr, 3, bx, "palette ", A(DIM))
         for i, hexv in enumerate(st.palette[:8]):
             _put(scr, 3, bx + 9 + i * 3, "###", A(_swatch(i, hexv)))
-    return len(logo)
+    # the status column is four rows; a one-line wordmark must not let the
+    # panes start on top of it
+    return max(len(logo), 4)
 
 
 _SWATCH_BASE = 20

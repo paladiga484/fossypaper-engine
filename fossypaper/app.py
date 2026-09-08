@@ -858,7 +858,7 @@ class MainWindow(QMainWindow):
         for w in self.lib:
             if self.hidevid.isChecked() and w.video:
                 continue
-            if q and q not in w.title.lower() and q != w.id:
+            if q and q not in w.title.lower() and q not in w.id.lower():
                 continue
             out.append(w)
         return out

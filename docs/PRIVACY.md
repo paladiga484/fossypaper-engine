@@ -47,8 +47,16 @@ That is the complete list. There are no other hosts.
 
 No request carries a login, a cookie, a device identifier, a machine id, a
 username, or anything about your library, your hardware or your other
-wallpapers. fossypaper sends a `User-Agent` of `fossypaper-engine/0.2` and
-nothing else in the way of headers. Non-HTTPS URLs are refused outright.
+wallpapers. Exactly one header is sent:
+
+```
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) fossypaper-engine/0.2
+```
+
+It is shaped like a browser's because Wallhaven sits behind Cloudflare, which
+answers `502` to anything that isn't — but it names the program, and the version,
+and nothing else. There is no identifier in it, and it is the same string for
+every user. Non-HTTPS URLs are refused outright.
 
 Wallhaven and Valve will, like any web server, see the IP address your request
 comes from. fossypaper cannot change that; a VPN or Tor can.
