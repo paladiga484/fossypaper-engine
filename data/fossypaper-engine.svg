@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="10" fill="#14110d"/>
+  <rect x="6" y="6" width="52" height="52" rx="7" fill="none" stroke="#c8a24b" stroke-width="2"/>
+  <path d="M10 44 L26 26 L36 38 L44 30 L54 44 Z" fill="#235b99"/>
+  <circle cx="44" cy="20" r="6" fill="#e9cf8a"/>
+  <text x="32" y="58" font-size="9" fill="#c8a24b" text-anchor="middle" font-family="serif">FP</text>
+</svg>

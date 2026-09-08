@@ -1,0 +1,14 @@
+[project]
+name = "fossypaper-engine"
+version = "0.1.0"
+description = "A FOSS Wallpaper Engine manager — CLI, TUI (lazypaper) and Qt GUI, with more knobs than the original."
+requires-python = ">=3.10"
+dependencies = ["PySide6", "Pillow"]
+
+[project.scripts]
+fossypaper = "fossypaper.cli:main"
+lazypaper = "fossypaper.tui:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
