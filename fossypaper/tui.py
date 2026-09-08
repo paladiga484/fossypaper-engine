@@ -145,6 +145,16 @@ class State:
         self.buffer = ""
         self.status = "ready"
         self.palette = engine.palette()
+        # Both of these used to be recomputed on every keypress: `pgrep` is a
+        # fork+exec and a property schema is a JSON parse. Holding `j` down
+        # should not cost either.
+        self.running = engine.is_running()
+        self._knobs: dict = {}
+
+    def knobs(self, wid: str) -> int:
+        if wid not in self._knobs:
+            self._knobs[wid] = sum(p.editable for p in engine.list_properties(wid))
+        return self._knobs[wid]
 
         # property editor
         self.props: list = []
@@ -198,9 +208,9 @@ def _header(scr, st, W):
     title = next((w.title for w in st.lib if w.id == cur), "-")
     _put(scr, 1, bx, "now     ", A(DIM))
     _put(scr, 1, bx + 9, title[: max(0, W - bx - 11)], A(VALUE))
-    running = engine.is_running()
     _put(scr, 2, bx, "state   ", A(DIM))
-    _put(scr, 2, bx + 9, "playing" if running else "stopped", A(OK) if running else A(DIM))
+    _put(scr, 2, bx + 9, "playing" if st.running else "stopped",
+         A(OK) if st.running else A(DIM))
     if st.palette:
         _put(scr, 3, bx, "palette ", A(DIM))
         for i, hexv in enumerate(st.palette[:8]):
@@ -281,7 +291,7 @@ def _draw_library(scr, st, top_y, H, W):
     for k, v, col in (("title", w.title, VALUE), ("id", w.id, 0),
                       ("kind", kind, 0), ("renders", renders, 0 if ok else WARN),
                       ("audio", "reactive" if w.audio else "silent", 0),
-                      ("knobs", str(sum(p.editable for p in engine.list_properties(w.id))), 0)):
+                      ("knobs", str(st.knobs(w.id)), 0)):
         _put(scr, y, rx + 2, f"{k:>8}", A(DIM))
         _put(scr, y, rx + 11, fit(v, rw - 13), A(col))
         y += 1
@@ -443,6 +453,7 @@ def _apply(st, wid):
     if ok:
         st.cfg["current"] = wid
         config.save(st.cfg)
+    st.running = ok or engine.is_running()
     st.status = ("" if ok else "! ") + msg
 
 
@@ -557,14 +568,18 @@ def _keys_library(st, scr, k) -> bool:
     elif k in (10, 13, curses.KEY_ENTER) and view:
         _apply(st, view[st.sel].id)
     elif k == ord(" "):
-        if engine.is_running():
-            engine.stop(); st.status = "wallpaper off"
+        if st.running:
+            engine.stop(); st.running = False; st.status = "wallpaper off"
         elif st.cfg.get("current"):
             _apply(st, st.cfg["current"])
     elif k == ord("/"):
         st.typing = "filter"; st.buffer = st.filter
     elif k == ord("r"):
-        st.lib = engine.scan_library(); st.status = f"{len(st.lib)} wallpapers"
+        st.lib = engine.scan_library()
+        st._knobs.clear()
+        engine.forget_tools()
+        st.running = engine.is_running()
+        st.status = f"{len(st.lib)} wallpapers"
     elif k == ord("p") and view:
         _load_props(st, view[st.sel].id)
         st.mode = "props"
@@ -662,6 +677,7 @@ def _keys_browse(st, scr, k) -> bool:
         st.status = ("" if ok else "! ") + msg
         if ok:
             st.lib = engine.scan_library()
+            st._knobs.clear()
     elif k == ord("o") and st.rows:
         ok, msg = sources.open_in_steam(st.rows[st.row_sel]) \
             if st.rows[st.row_sel].source == "workshop" else (False, "")
@@ -674,11 +690,17 @@ def _keys_browse(st, scr, k) -> bool:
 def run(scr):
     curses.curs_set(0)
     scr.keypad(True)
+    # getch returns -1 after this long with no key. That tick is where the one
+    # genuinely expensive check lives, instead of on the draw path.
+    scr.timeout(2000)
     _init_colors()
     st = State()
     while True:
         _draw(scr, st)
         k = scr.getch()
+        if k == -1:
+            st.running = engine.is_running()
+            continue
         if k == curses.KEY_RESIZE:
             continue
         if st.typing:

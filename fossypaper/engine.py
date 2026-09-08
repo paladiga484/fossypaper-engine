@@ -28,7 +28,24 @@ from pathlib import Path
 from . import properties as props_mod
 
 STATE = Path.home() / ".local/state/fossypaper"
-BIN = shutil.which("linux-wallpaperengine") or "linux-wallpaperengine"
+
+# PATH does not change under a running process, and the TUI asks "is mpvpaper
+# installed?" once per visible row per keypress. Look each name up once.
+_WHICH: dict[str, str | None] = {}
+
+
+def which(name: str) -> str | None:
+    if name not in _WHICH:
+        _WHICH[name] = shutil.which(name)
+    return _WHICH[name]
+
+
+def forget_tools() -> None:
+    """Drop the cache — after installing something, mid-session."""
+    _WHICH.clear()
+
+
+BIN = which("linux-wallpaperengine") or "linux-wallpaperengine"
 
 STEAM_WORKSHOP = Path.home() / ".local/share/Steam/steamapps/workshop/content/431960"
 FLATPAK_WORKSHOP = (Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam"
@@ -83,7 +100,7 @@ WE_DIR = _DirProxy()
 
 
 def have_renderer() -> bool:
-    return shutil.which("linux-wallpaperengine") is not None
+    return which("linux-wallpaperengine") is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -271,14 +288,14 @@ def outputs() -> list[str]:
 
 
 def _outputs_hypr() -> list[str]:
-    if not shutil.which("hyprctl"):
+    if not which("hyprctl"):
         return []
     r = subprocess.run(["hyprctl", "-j", "monitors"], capture_output=True, text=True, timeout=5)
     return [m["name"] for m in json.loads(r.stdout) if m.get("name")]
 
 
 def _outputs_niri() -> list[str]:
-    if not shutil.which("niri"):
+    if not which("niri"):
         return []
     r = subprocess.run(["niri", "msg", "-j", "outputs"], capture_output=True, text=True, timeout=5)
     data = json.loads(r.stdout)
@@ -286,7 +303,7 @@ def _outputs_niri() -> list[str]:
 
 
 def _outputs_wlr() -> list[str]:
-    if not shutil.which("wlr-randr"):
+    if not which("wlr-randr"):
         return []
     r = subprocess.run(["wlr-randr"], capture_output=True, text=True, timeout=5)
     return [ln.split()[0] for ln in r.stdout.splitlines()
@@ -336,12 +353,12 @@ def backend_for(wp: Wallpaper) -> tuple[str, bool]:
     if wp.type in _UNSUPPORTED:
         return wp.type, False
     if wp.entry is not None and wp.entry.suffix.lower() in _VIDEO_EXT:
-        return "mpvpaper", bool(shutil.which("mpvpaper"))
+        return "mpvpaper", bool(which("mpvpaper"))
     if wp.entry is not None and wp.entry.suffix.lower() == ".pkg":
         return "wpe", have_renderer()
     if wp.entry is not None and wp.entry.suffix.lower() in _IMAGE_EXT:
-        be = "swww" if shutil.which("swww") else "mpvpaper"
-        return be, bool(shutil.which(be))
+        be = "swww" if which("swww") else "mpvpaper"
+        return be, bool(which(be))
     return "wpe", have_renderer()
 
 
@@ -366,8 +383,8 @@ def why_unsupported(wp: Wallpaper) -> str:
 
 def backends_status() -> dict:
     return {"wpe": have_renderer(),
-            "mpvpaper": bool(shutil.which("mpvpaper")),
-            "swww": bool(shutil.which("swww"))}
+            "mpvpaper": bool(which("mpvpaper")),
+            "swww": bool(which("swww"))}
 
 
 def is_running() -> bool:
@@ -378,7 +395,7 @@ def is_running() -> bool:
 def stop():
     for c in _MANAGED:
         subprocess.run(["pkill", "-x", c], capture_output=True)
-    if shutil.which("swww"):
+    if which("swww"):
         subprocess.run(["swww", "clear"], capture_output=True, timeout=5)
 
 
@@ -528,7 +545,7 @@ def screenshot(wid: str, out: Path, opts: dict) -> bool:
         suffix = wp.entry.suffix.lower()
         if suffix in _IMAGE_EXT:
             return _still_from_image(wp.entry, out)
-        if suffix in _VIDEO_EXT and shutil.which("ffmpeg"):
+        if suffix in _VIDEO_EXT and which("ffmpeg"):
             r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1",
                                 "-i", str(wp.entry), "-frames:v", "1", str(out)],
                                capture_output=True, timeout=60)
@@ -568,6 +585,7 @@ def thumbnail(wid: str, width: int = 240) -> Path | None:
             return dest
     except OSError:
         pass
+    part = dest.with_suffix(".part.png")
     try:
         from PIL import Image
         THUMBS.mkdir(parents=True, exist_ok=True)
@@ -575,10 +593,21 @@ def thumbnail(wid: str, width: int = 240) -> Path | None:
         img.seek(0)                      # first frame of an animation
         img = img.convert("RGB")
         img.thumbnail((width, width), Image.LANCZOS)
-        img.save(dest)
+        img.save(part)
+        os.replace(part, dest)           # never leave a half-written thumbnail
     except Exception:
+        part.unlink(missing_ok=True)
         return None
     return dest
+
+
+def clear_thumbnails() -> int:
+    n = 0
+    for f in THUMBS.glob("*"):
+        if f.is_file():
+            f.unlink()
+            n += 1
+    return n
 
 
 def _still_from_image(src: Path, out: Path) -> bool:
@@ -594,7 +623,7 @@ def _still_from_image(src: Path, out: Path) -> bool:
 #  Theme sync — palette out to shells/compositors
 # --------------------------------------------------------------------------- #
 def theme_backends() -> list[str]:
-    return ["builtin"] + [t for t in ("matugen", "wallust", "wal") if shutil.which(t)]
+    return ["builtin"] + [t for t in ("matugen", "wallust", "wal") if which(t)]
 
 
 def sync_theme(wid: str, opts: dict, backend: str = "builtin") -> tuple[bool, str]:
@@ -718,7 +747,7 @@ def apply_current() -> tuple[bool, str]:
 
 def install_service() -> Path:
     SERVICE.parent.mkdir(parents=True, exist_ok=True)
-    exe = shutil.which("fossypaper") or str(Path.home() / ".local/bin/fossypaper")
+    exe = which("fossypaper") or str(Path.home() / ".local/bin/fossypaper")
     SERVICE.write_text(
         "[Unit]\nDescription=fossypaper — restore the wallpaper at login\n"
         "After=graphical-session.target\nPartOf=graphical-session.target\n\n"

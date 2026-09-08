@@ -276,6 +276,7 @@ class CardGrid(QScrollArea):
         self._grid.setContentsMargins(12, 12, 12, 12)
         self.setWidget(self._host)
         self._cols = 0
+        self._stretched = -1
         self._relayout = QTimer(self, singleShot=True, interval=60)
         self._relayout.timeout.connect(self._place)
 
@@ -298,7 +299,12 @@ class CardGrid(QScrollArea):
         self._cols = cols
         for i, w in enumerate(self._widgets):
             self._grid.addWidget(w, i // cols, i % cols)
-        self._grid.setRowStretch(len(self._widgets) // cols + 1, 1)
+        # clear the previous filler row first — reflowing from 5 columns to 3
+        # otherwise leaves a stretched row in the middle of the grid
+        if self._stretched >= 0:
+            self._grid.setRowStretch(self._stretched, 0)
+        self._stretched = len(self._widgets) // cols + 1
+        self._grid.setRowStretch(self._stretched, 1)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

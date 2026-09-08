@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -116,9 +117,14 @@ def thumbnail(url: str) -> Path | None:
     dest = CACHE / (hashlib.sha256(url.encode()).hexdigest()[:24] + ext)
     if dest.is_file() and dest.stat().st_size:
         return dest
+    # via a temp file: an interrupted fetch must not leave a truncated image
+    # cached under a name we will then trust forever
+    part = dest.with_suffix(dest.suffix + ".part")
     try:
-        dest.write_bytes(_get(url, timeout=15))
-    except SourceError:
+        part.write_bytes(_get(url, timeout=15))
+        os.replace(part, dest)
+    except (SourceError, OSError):
+        part.unlink(missing_ok=True)
         return None
     return dest
 
@@ -294,8 +300,9 @@ def fetch_workshop(row: Listing) -> tuple[bool, str]:
     (steamcmd if you have it, Steam itself otherwise) instead of impersonating
     a client.
     """
+    from . import engine
     cfg = config.load()
-    if shutil.which("steamcmd"):
+    if engine.which("steamcmd"):
         login = cfg.get("steam_login", "").strip() or "anonymous"
         argv = ["steamcmd", "+login", login, "+workshop_download_item",
                 str(WE_APPID), row.id, "+quit"]
@@ -315,8 +322,10 @@ def fetch_workshop(row: Listing) -> tuple[bool, str]:
 def open_in_steam(row: Listing) -> tuple[bool, str]:
     """Open the item where Steam can subscribe to it; Steam then syncs it into
     the library fossypaper already reads."""
-    target = f"steam://url/CommunityFilePage/{row.id}" if shutil.which("steam") else row.page_url
-    opener = shutil.which("xdg-open") or shutil.which("steam")
+    from . import engine
+    target = (f"steam://url/CommunityFilePage/{row.id}"
+              if engine.which("steam") else row.page_url)
+    opener = engine.which("xdg-open") or engine.which("steam")
     if not opener:
         return False, f"no opener found — visit {row.page_url}"
     try:
@@ -333,7 +342,8 @@ def fetch(row: Listing) -> tuple[bool, str]:
 
 def available() -> dict:
     """Which browsers can do what, given what's installed."""
+    from . import engine
     return {"wallhaven": True,
             "workshop": True,
-            "workshop_download": bool(shutil.which("steamcmd")),
-            "steam": bool(shutil.which("steam"))}
+            "workshop_download": bool(engine.which("steamcmd")),
+            "steam": bool(engine.which("steam"))}

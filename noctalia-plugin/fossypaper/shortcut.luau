@@ -1,5 +1,8 @@
 --!nonstrict
 -- Control-center tile: wallpaper on or off, and nothing else.
+--
+-- The running state comes from the host's own process check rather than a
+-- subprocess, so the tile costs nothing to display.
 
 local fossy = require("./fossy.luau")
 
@@ -13,10 +16,10 @@ local function render()
 end
 
 local function refresh()
-  fossy.json({ "status" }, function(status, _err)
-    running = status ~= nil and status.running == true
+  noctalia.processMatches(function(matched)
+    running = matched
     render()
-  end)
+  end, "linux-wallpaper", "mpvpaper")
 end
 
 render()

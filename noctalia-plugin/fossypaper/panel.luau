@@ -77,13 +77,14 @@ local function row(w)
     table.insert(children, ui.glyph({ name = "check", size = 16, color = "primary" }))
   end
 
-  return ui.row({
+  -- No `fill` at all when the row isn't lit: there is no "transparent" colour
+  -- token, and dropping the prop is how a declarative tree says "no fill".
+  local props = {
     key = w.id,
     gap = 10,
     align = "center",
     padding = 6,
     radius = 6,
-    fill = if lit then "surface_variant/0.55" else "transparent",
     onHover = "onRowHover",
     onClick = function()
       if not usable then
@@ -100,7 +101,11 @@ local function row(w)
         refresh()
       end)
     end,
-  }, children)
+  }
+  if lit then
+    props.fill = "surface_variant/0.55"
+  end
+  return ui.row(props, children)
 end
 
 function render()

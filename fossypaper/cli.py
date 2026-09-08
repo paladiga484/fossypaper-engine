@@ -232,6 +232,10 @@ def cmd_config(a):
         config.save(cfg)
         print("saved")
         return 0
+    if a.clear_cache:
+        n = sources.clear_cache() + engine.clear_thumbnails()
+        print(f"cleared {n} cached image(s)")
+        return 0
     if a.reset:
         config.save({**config.DEFAULTS,
                      **{k: cfg[k] for k in ("current", "properties") if k in cfg}})
@@ -279,9 +283,9 @@ def cmd_doctor(a):
         ("linux-wallpaperengine", b["wpe"], "WE scene wallpapers"),
         ("mpvpaper", b["mpvpaper"], "video wallpapers, and stills without swww"),
         ("swww", b["swww"], "still images (optional — mpvpaper covers it)"),
-        ("steamcmd", bool(__import__("shutil").which("steamcmd")),
+        ("steamcmd", bool(engine.which("steamcmd")),
          "downloading Workshop items in-app (optional — Steam can do it)"),
-        ("ffmpeg", bool(__import__("shutil").which("ffmpeg")),
+        ("ffmpeg", bool(engine.which("ffmpeg")),
          "palette extraction from video wallpapers"),
     ]
     print(f"library roots : {engine.WE_DIR}")
@@ -373,7 +377,10 @@ def build_parser():
 
     s = sub.add_parser("config", help="show or change settings")
     s.add_argument("--set", nargs="*", metavar="KEY=VAL")
-    s.add_argument("--reset", action="store_true")
+    s.add_argument("--reset", action="store_true",
+                   help="settings back to defaults (your library state is kept)")
+    s.add_argument("--clear-cache", action="store_true",
+                   help="delete every cached thumbnail, local and downloaded")
     s.set_defaults(fn=cmd_config)
 
     sub.add_parser("daemon", help="restore the saved wallpaper (login service)").set_defaults(fn=cmd_daemon)
