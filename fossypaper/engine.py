@@ -514,6 +514,18 @@ def _start_mpvpaper(wp: Wallpaper, opts: dict):
         if opts.get("fps"):
             mo.append(f"override-display-fps={opts['fps']}")
 
+    # `scaling` is a global render setting, so it has to mean the same thing on
+    # this backend as it does on the scene one. mpv spells it differently:
+    # panscan zooms until the frame fills and crops the overflow, and dropping
+    # keepaspect is the only way to actually distort.
+    scale = opts.get("scaling", "")
+    if scale == "fill":
+        mo.append("panscan=1.0")
+    elif scale == "fit":
+        mo.append("panscan=0.0")
+    elif scale == "stretch":
+        mo.append("keepaspect=no")
+
     base = ["mpvpaper", "-l", opts.get("layer") or "bottom", "-o", " ".join(mo)]
     if opts.get("fullscreen_pause", True):
         # -p pauses seamlessly; -a FULL extends that to any fullscreen window.
