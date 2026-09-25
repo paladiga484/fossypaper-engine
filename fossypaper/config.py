@@ -17,7 +17,12 @@ DEFAULTS = {
     # --- render ---------------------------------------------------------- #
     "output": "",              # "" = every connected output
     "span": [],                # outputs to stretch one wallpaper across
-    "layer": "bottom",
+    # auto = "background" (a real wallpaper), or "bottom" when a shell such as
+    # Noctalia / iNiR / swaybg already draws its own backdrop there
+    "layer": "auto",
+    # auto | layer | plasma | gnome | x11 — who owns the desktop background.
+    # auto picks from the session: Plasma and GNOME draw it themselves.
+    "host": "auto",
     "fps": 30,
     "gpu": "auto",
     "scaling": "",             # "" | default | stretch | fit | fill
@@ -58,7 +63,7 @@ DEFAULTS = {
     "ui_sort": "title",        # library order: title | new | kind (GUI and TUI share it)
 }
 
-_RENDER_KEYS = ("output", "span", "layer", "fps", "gpu", "scaling", "clamp", "assets_dir",
+_RENDER_KEYS = ("output", "span", "layer", "host", "fps", "gpu", "scaling", "clamp", "assets_dir",
                 "silent", "volume", "no_automute", "audio_processing",
                 "no_particles", "no_parallax", "no_mouse",
                 "fullscreen_pause", "pause_only_active", "pause_ignore_appids")

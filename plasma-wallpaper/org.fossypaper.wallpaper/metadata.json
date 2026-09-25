@@ -1,0 +1,14 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [{ "Name": "fossypaper" }],
+        "Category": "",
+        "Description": "Wallpaper Engine scenes, videos and stills, set by fossypaper / lazypaper",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "org.fossypaper.wallpaper",
+        "License": "MIT",
+        "Name": "fossypaper",
+        "Version": "0.3.0"
+    },
+    "X-KDE-ParentApp": "org.kde.plasmashell"
+}

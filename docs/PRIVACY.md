@@ -23,6 +23,14 @@ Everything that wants to drive fossypaper does it by running the `fossypaper`
 command and reading its standard output. That is how the Noctalia plugin works,
 and it is the only mechanism offered.
 
+On KDE Plasma, fossypaper sets the wallpaper by *calling* plasmashell's own
+D-Bus method (`org.kde.PlasmaShell.evaluateScript`) as a client. Its Plasma
+wallpaper type is plain QML. It reads its settings from its own config group and
+opens no socket. For live scenes it loads one compiled QML type
+(`SceneViewer`) from `plasma6-wallpapers-wallpaper-engine-git` if that package
+is installed. It does **not** load that package's own wallpaper type, whose
+helper runs an unauthenticated local WebSocket server.
+
 The one consequence worth stating: **web-type Wallpaper Engine wallpapers are
 not supported**. Rendering one would mean serving its HTML from a local server.
 fossypaper refuses rather than opening a port, and says so in the interface.
@@ -86,17 +94,24 @@ works without either, and hands items to Steam to fetch.
 | `~/.cache/fossypaper/library/` | stills baked from your own local previews | delete the directory |
 | `~/.cache/fossypaper/ui/` | two tiny arrow SVGs per theme colour (Qt stylesheets cannot draw their own) | delete the directory |
 | `~/.local/share/fossypaper/wallpapers/` | wallpapers you downloaded from Wallhaven | delete what you don't want |
+| `~/.local/state/fossypaper/stills/` | one rendered frame per scene, shown where scenes can't animate (GNOME, Plasma without the scene renderer) | delete the directory |
+| `~/.local/state/fossypaper/{plasma,gnome}-previous.json` | the wallpaper you had before, so `fossypaper off` can put it back | removed by `fossypaper off` |
+| `~/.local/share/plasma/wallpapers/org.fossypaper.wallpaper/` | the Plasma wallpaper type, put there by `./install.sh` | delete the directory |
+| plasmashell's own `plasma-org.kde.plasma.desktop-appletsrc` | on Plasma: which wallpaper type each desktop uses, and this one's settings | `fossypaper off` restores the previous type |
+| GNOME's `org.gnome.desktop.background` (and Hanabi's `video-path`) | on GNOME: the picture URI | `fossypaper off` restores the previous values |
 | `~/.config/systemd/user/fossypaper.service` | only if you enable login autostart | `fossypaper autostart off` |
 
 Nothing else is written anywhere. fossypaper does not touch `/etc`, `/usr` or
-anything outside your home directory — the SDDM command it prints for you to run
+anything outside your home directory (the desktop settings above live in your
+home too) — the SDDM command it prints for you to run
 is exactly that: printed, for you to run.
 
 ## What runs on your machine
 
 fossypaper starts other programs to do the actual rendering:
-`linux-wallpaperengine`, `mpvpaper`, `swww`, and — only if you use those
-features — `steamcmd`, `ffmpeg`, `matugen`/`wallust`/`wal`, `xdg-open`, and
+`linux-wallpaperengine`, `mpvpaper`, `swww`; on Plasma `qdbus6`, on GNOME
+`gsettings`, on X11 `xwallpaper`/`feh`/`xwinwrap`/`mpv`; and — only if you use
+those features — `steamcmd`, `ffmpeg`, `matugen`/`wallust`/`wal`, `xdg-open`, and
 `systemctl --user`. Those are separate projects with their own behaviour and
 their own privacy characteristics.
 

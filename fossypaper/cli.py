@@ -293,11 +293,45 @@ def cmd_doctor(a):
     print(f"wallpapers    : {len(lib)}  ({len(bad)} not renderable here)")
     print(f"outputs       : {', '.join(engine.outputs()) or 'none detected'}")
     comp = engine.compositor()
+    o = config.opts(config.load())
+    h = engine.host(o)
     print(f"compositor    : {comp}")
+    print(f"desktop host  : {h}" + ("  (auto)" if o.get("host", "auto") == "auto" else "  (forced)"))
+    if h == "layer":
+        shell = engine.backdrop_shell()
+        print(f"layer         : {engine.resolved_layer(o)}"
+              + (f"  ({o['layer']}; {shell} draws its own backdrop)" if o["layer"] == "auto" and shell
+                 else f"  ({o['layer']})"))
     print(f"theme backends: {', '.join(engine.theme_backends())}\n")
     for name, ok, why in lines:
         print(f"  [{'x' if ok else ' '}] {name:24} {why}")
-    if comp in engine.FULLSCREEN_BLIND:
+    if h == "plasma":
+        mod = engine.plasma_scene_module()
+        print(f"  [{'x' if engine.plasma_plugin_installed() else ' '}] {'fossypaper Plasma wallpaper':24} "
+              "registers as a real wallpaper type (./install.sh puts it in place)")
+        print(f"  [{'x' if mod else ' '}] {'native scene renderer':24} live scenes on Plasma "
+              "(plasma6-wallpapers-wallpaper-engine-git) — otherwise a still frame")
+        print(f"  [{'x' if engine.assets_dir(o) else ' '}] {'WE assets folder':24} "
+              "scenes need Wallpaper Engine's own assets (Steam install)")
+        if mod:
+            print("\n  ! that package also adds a wallpaper type called \"Wallpaper Engine for Kde\".")
+            print("    Don't pick it in Plasma's wallpaper settings: its helper runs an")
+            print("    unauthenticated WebSocket server that can read any file you can.")
+            print("    fossypaper only loads the scene renderer from it, not that helper.")
+    if h == "gnome":
+        print(f"  [{'x' if engine.hanabi_available() else ' '}] {'Hanabi extension':24} "
+              "video wallpapers on GNOME — otherwise a still frame")
+        print("\n  i GNOME has no layer-shell, so scenes show as a still frame there.")
+    if h == "layer" and comp == "niri" and engine.resolved_layer(o) == "background":
+        print("\n  i to keep the wallpaper visible in niri's overview, add to config.kdl:")
+        print('      layer-rule {')
+        print('          match namespace="^(linux-wallpaperengine|mpvpaper|swww-daemon.*)$"')
+        print('          place-within-backdrop true')
+        print('      }')
+    if h == "layer" and o["layer"] == "auto" and engine.backdrop_shell():
+        print(f"\n  i {engine.backdrop_shell()} draws its own wallpaper, so this sits one layer up")
+        print("    (bottom). Turn the shell's wallpaper off and it becomes a true background.")
+    if engine.fullscreen_blind():
         print(f"\n  ! {comp} gives the renderer no way to see fullscreen windows, so the")
         print("    wallpaper keeps rendering behind games. Turn it off before playing")
         print("    (`fossypaper off`, or `fossypaper toggle` on a hotkey).")

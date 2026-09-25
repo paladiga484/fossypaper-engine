@@ -746,7 +746,14 @@ class SettingsDialog(QDialog):
             ("Output", self._combo("output", outs, labels={"": "every screen"})),
             ("Span across", self._line("span", ",".join(cfg.get("span") or []),
                                        "DP-1,HDMI-A-1 — one wallpaper stretched over both")),
-            ("Layer", self._combo("layer", ["bottom", "background", "top"])),
+            ("Desktop", self._combo("host", ["auto", "layer", "plasma", "gnome", "x11"],
+                                    labels={"auto": f"detect ({engine.detect_host()})",
+                                            "layer": "layer-shell (Hyprland, niri, sway…)",
+                                            "plasma": "Plasma wallpaper",
+                                            "gnome": "GNOME background",
+                                            "x11": "X11 root window"})),
+            ("Layer", self._combo("layer", ["auto", "bottom", "background", "top"],
+                                  labels={"auto": "auto — background, or bottom over a shell's own"})),
             ("Frame rate", self._spin("fps", 1, 240)),
             ("Scaling", self._combo("scaling", ["", "default", "stretch", "fit", "fill"],
                                     labels={"": "the wallpaper's own"})),
@@ -1350,6 +1357,7 @@ class MainWindow(QMainWindow):
         if d.exec():
             self.cfg.update(d.values())
             config.save(self.cfg)
+            engine.forget_tools()          # the desktop/host choice may have changed
             self.browser.cfg = self.cfg
             self._restyle()
             self._build_grid()

@@ -17,6 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Every test below that isn't about host detection wants the layer-shell path,
+# whatever desktop the suite happens to run on — never plasmashell or gsettings.
+os.environ["FOSSYPAPER_HOST"] = "layer"
+
 from fossypaper import config, engine, properties, sources, theme  # noqa: E402
 
 
@@ -365,7 +369,7 @@ class ConfigTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_missing_file_gives_defaults(self):
-        self.assertEqual(config.load()["layer"], "bottom")
+        self.assertEqual(config.load()["layer"], "auto")
 
     def test_unknown_keys_survive_a_round_trip(self):
         cfg = config.load()
@@ -476,6 +480,136 @@ class RealLibraryTest(unittest.TestCase):
             for i, tok in enumerate(argv):
                 if tok == "--bg":
                     self.assertEqual(argv[i + 1], w.id)
+
+
+class HostTest(unittest.TestCase):
+    """Who owns the desktop background decides how a wallpaper is applied."""
+
+    def setUp(self):
+        from unittest.mock import patch
+        self.patch = patch
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        engine.forget_tools()
+
+    def tearDown(self):
+        engine.forget_tools()
+        self.tmp.cleanup()
+
+    def env(self, **kv):
+        base = {k: "" for k in ("FOSSYPAPER_HOST", "HYPRLAND_INSTANCE_SIGNATURE", "NIRI_SOCKET",
+                                "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DISPLAY",
+                                "WAYLAND_DISPLAY")}
+        return self.patch.dict(os.environ, {**base, **kv})
+
+    def test_detects_each_desktop(self):
+        cases = [({"XDG_CURRENT_DESKTOP": "KDE", "WAYLAND_DISPLAY": "wayland-0"}, "plasma"),
+                 ({"XDG_CURRENT_DESKTOP": "KDE", "XDG_SESSION_TYPE": "x11"}, "plasma"),
+                 ({"XDG_CURRENT_DESKTOP": "ubuntu:GNOME"}, "gnome"),
+                 ({"HYPRLAND_INSTANCE_SIGNATURE": "x", "XDG_CURRENT_DESKTOP": "Hyprland"}, "layer"),
+                 ({"NIRI_SOCKET": "/run/niri", "XDG_CURRENT_DESKTOP": "niri"}, "layer"),
+                 ({"XDG_CURRENT_DESKTOP": "sway"}, "layer"),
+                 ({"XDG_CURRENT_DESKTOP": "i3", "XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"}, "x11"),
+                 ({"XDG_CURRENT_DESKTOP": "river", "WAYLAND_DISPLAY": "wayland-1"}, "layer")]
+        for env, want in cases:
+            with self.subTest(env=env), self.env(**env):
+                self.assertEqual(engine.host({"host": "auto"}), want)
+
+    def test_explicit_choice_beats_env_beats_detection(self):
+        with self.env(XDG_CURRENT_DESKTOP="KDE", FOSSYPAPER_HOST="gnome"):
+            self.assertEqual(engine.host({"host": "auto"}), "gnome")
+            self.assertEqual(engine.host({"host": "layer"}), "layer")
+            self.assertEqual(engine.host({"host": "nonsense"}), "gnome")
+
+    def test_auto_layer_steps_over_a_shell_backdrop(self):
+        with self.patch.object(engine, "backdrop_shell", return_value=""):
+            self.assertEqual(engine.resolved_layer({"layer": "auto"}), "background")
+        with self.patch.object(engine, "backdrop_shell", return_value="qs"):
+            self.assertEqual(engine.resolved_layer({"layer": "auto"}), "bottom")
+            self.assertEqual(engine.resolved_layer({"layer": "top"}), "top")
+
+    def test_argv_carries_the_resolved_layer_and_none_on_x11(self):
+        o = {**config.opts(dict(config.DEFAULTS)), "output": "eDP-1"}
+        with self.patch.object(engine, "backdrop_shell", return_value=""):
+            argv = engine.build_argv("42", {**o, "host": "layer"})
+            self.assertEqual(argv[argv.index("--layer") + 1], "background")
+            self.assertNotIn("--layer", engine.build_argv("42", {**o, "host": "x11"}))
+
+    def make_wp(self, name, kind):
+        d = self.root / "lib" / "77"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"\0")
+        (d / "project.json").write_text(json.dumps({"title": 'Q"uote', "type": kind, "file": name}))
+        return engine.read_wallpaper(d)
+
+    def test_plasma_and_gnome_draw_it_themselves(self):
+        wp = self.make_wp("clip.mp4", "video")
+        with self.patch.object(engine, "which", return_value=None):
+            with self.env(FOSSYPAPER_HOST="layer"):
+                self.assertFalse(engine.backend_for(wp)[1])      # needs mpvpaper
+            for h in ("plasma", "gnome"):
+                with self.env(FOSSYPAPER_HOST=h):
+                    self.assertTrue(engine.backend_for(wp)[1], h)
+
+    def test_plasma_script_registers_and_remembers(self):
+        wp = self.make_wp("scene.pkg", "scene")
+        cfg = engine.plasma_config(wp, {"fps": 60, "scaling": "fit"}, None)
+        self.assertEqual((cfg["Kind"], cfg["Fps"], cfg["Fit"]), ("scene", 60, "fit"))
+        js = engine.plasma_script(cfg)
+        self.assertIn('d.wallpaperPlugin = "org.fossypaper.wallpaper"', js)
+        self.assertIn('d.writeConfig("Title", "Q\\"uote")', js)       # escaped, not injected
+        self.assertIn("print(JSON.stringify(prev))", js)
+
+    def test_plasma_apply_saves_the_old_wallpaper_once_and_stop_restores(self):
+        wp = self.make_wp("pic.png", "image")
+        prev = self.root / "plasma-previous.json"
+        calls = []
+
+        def fake_eval(script):
+            calls.append(script)
+            return True, '{"1": "org.kde.image"}' if "writeConfig" in script else ""
+        with self.patch.object(engine, "_PLASMA_PREV", prev), \
+             self.patch.object(engine, "STATE", self.root), \
+             self.patch.object(engine, "plasma_plugin_installed", return_value=True), \
+             self.patch.object(engine, "plasma_eval", side_effect=fake_eval):
+            ok, msg = engine._start_plasma(wp, {})
+            self.assertTrue(ok, msg)
+            self.assertEqual(json.loads(prev.read_text()), {"1": "org.kde.image"})
+            engine.stop(keep="plasma")                  # re-applying: leave it be
+            self.assertTrue(prev.is_file())
+            engine.stop()
+            self.assertFalse(prev.is_file())
+            self.assertIn('"org.kde.image"', calls[-1])
+
+    def test_plasma_refusal_is_reported(self):
+        wp = self.make_wp("pic.png", "image")
+        with self.patch.object(engine, "_PLASMA_PREV", self.root / "p.json"), \
+             self.patch.object(engine, "plasma_plugin_installed", return_value=True), \
+             self.patch.object(engine, "plasma_eval", return_value=(False, "Widgets are locked")):
+            ok, msg = engine._start_plasma(wp, {})
+        self.assertFalse(ok)
+        self.assertIn("Widgets are locked", msg)
+
+    def test_gnome_sets_both_uris_and_restores(self):
+        wp = self.make_wp("pic.png", "image")
+        sets = []
+
+        def fake(*args):
+            if args[0] == "get":
+                return True, "'file:///old.png'"
+            if args[0] == "set":
+                sets.append(args[1:])
+            return True, ""
+        with self.patch.object(engine, "_GNOME_PREV", self.root / "g.json"), \
+             self.patch.object(engine, "STATE", self.root), \
+             self.patch.object(engine, "_gsettings", side_effect=fake):
+            ok, msg = engine._start_gnome(wp, {})
+            self.assertTrue(ok, msg)
+            keys = {k for _schema, k, _v in sets}
+            self.assertTrue({"picture-uri", "picture-uri-dark"} <= keys)
+            sets.clear()
+            engine._gnome_restore()
+            self.assertIn(("org.gnome.desktop.background", "picture-uri", "'file:///old.png'"), sets)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 [project]
 name = "fossypaper-engine"
-version = "0.2.0"
+version = "0.3.0"
 description = "A wallpaper manager for Wayland — Wallpaper Engine scenes, video and stills, with a browser and per-wallpaper controls."
 requires-python = ">=3.10"
 dependencies = ["PySide6", "Pillow"]

@@ -43,7 +43,8 @@ LOGO_SMALL = [
 LOGO_TINY = ["lazypaper"]
 
 FPS_CYCLE = [30, 60, 24, 45, 90, 120, 144]
-LAYER_CYCLE = ["bottom", "background", "top"]
+LAYER_CYCLE = ["auto", "bottom", "background", "top"]
+HOST_CYCLE = ["auto", "layer", "plasma", "gnome", "x11"]
 GPU_CYCLE = ["auto", "nvidia", "mesa"]
 SCALE_CYCLE = ["", "default", "stretch", "fit", "fill"]
 AUDIO_CYCLE = ["auto", "always", "never"]
@@ -354,13 +355,19 @@ def _draw_library(scr, st, top_y, H, W):
     y += 1
     _put(scr, y, rx + 2, "SETTINGS", A(ACCENT)); y += 1
     o = config.opts(st.cfg)
-    for k, v in (("f  fps", o["fps"]), ("l  layer", o["layer"]), ("v  gpu", o["gpu"]),
+    h = engine.host(o)
+    for k, v in (("d  desktop", (o["host"] if o["host"] != "auto" else "auto: " + h)),
+                 ("f  fps", o["fps"]),
+                 ("l  layer", (o["layer"] + (" -> " + engine.resolved_layer(o)
+                                             if o["layer"] == "auto" else ""))
+                  if h == "layer" else "n/a on " + h),
+                 ("v  gpu", o["gpu"]),
                  ("s  scaling", o["scaling"] or "auto"),
                  ("o  output", o["output"] or "all"),
                  ("a  audio", o["audio_processing"]),
                  ("m  mute", "on" if o["silent"] else f"vol {o['volume']}"),
                  ("x  pause", ("on fullscreen" + ("  (blind on " + engine.compositor() + ")"
-                                                   if engine.compositor() in engine.FULLSCREEN_BLIND
+                                                   if engine.fullscreen_blind()
                                                    else "")) if o["fullscreen_pause"] else "never")):
         if y >= top_y + listh - 2:
             break
@@ -454,6 +461,7 @@ HELP = [
     ("S", "cycle sort: a-z, newest, by kind"),
     ("z", "shuffle: apply a random one from what's shown"),
     ("r", "rescan the library"),
+    ("d", "desktop: auto, layer-shell, Plasma, GNOME, X11 root"),
     ("f l v s o a m x", "fps, layer, gpu, scaling, output, audio, mute, pause"),
     ("R", "reset this wallpaper's properties"),
     ("?", "this help"),
@@ -679,6 +687,9 @@ def _keys_library(st, scr, k) -> bool:
         _cycle(st, "fps", FPS_CYCLE, "fps")
     elif k == ord("l"):
         _cycle(st, "layer", LAYER_CYCLE, "layer")
+    elif k == ord("d"):
+        _cycle(st, "host", HOST_CYCLE, "desktop")
+        engine.forget_tools()
     elif k == ord("v"):
         _cycle(st, "gpu", GPU_CYCLE, "gpu")
     elif k == ord("s"):

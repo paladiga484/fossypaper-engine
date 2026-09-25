@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install fossypaper-engine for the current user:
-#   launchers on PATH · desktop entries + icons · the Noctalia plugin.
+#   launchers on PATH · desktop entries + icons · the Noctalia plugin ·
+#   the Plasma wallpaper type.
 # Everything lands under $HOME. Nothing here needs root, and nothing is
 # installed system-wide.
 set -euo pipefail
@@ -10,6 +11,7 @@ BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 NOCT="${XDG_DATA_HOME:-$HOME/.local/share}/noctalia/plugins"
+PLASMA="${XDG_DATA_HOME:-$HOME/.local/share}/plasma/wallpapers"
 
 mkdir -p "$BIN" "$APPS" "$ICONS"
 
@@ -46,6 +48,15 @@ if command -v noctalia >/dev/null; then
   noctalia msg plugins enable friend/fossypaper >/dev/null 2>&1 || true
   echo "  noctalia   plugin installed -> $NOCT/fossypaper  (friend/fossypaper)"
 fi
+
+# ---- Plasma wallpaper type -------------------------------------------------- #
+# Plain files: plasmashell finds wallpaper packages here on its own. Installed
+# whether or not you're in Plasma right now, so it's there when you log in.
+mkdir -p "$PLASMA"
+rm -rf "$PLASMA/org.fossypaper.wallpaper"
+cp -r "$HERE/plasma-wallpaper/org.fossypaper.wallpaper" "$PLASMA/org.fossypaper.wallpaper"
+echo "  plasma     wallpaper type installed -> $PLASMA/org.fossypaper.wallpaper"
+echo "             (updating it? plasmashell caches QML: systemctl --user restart plasma-plasmashell)"
 
 echo "installed:"
 echo "  commands   $BIN/fossypaper · $BIN/lazypaper"

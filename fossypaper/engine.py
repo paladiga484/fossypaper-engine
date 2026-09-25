@@ -9,6 +9,10 @@ What it knows how to do:
   * **Route each wallpaper to a renderer that can actually draw it**: WE scenes
     to `linux-wallpaperengine`, video to `mpvpaper`, stills to `swww` when you
     have it and `mpvpaper` when you don't.
+  * **Be the wallpaper, not a window over it**, on whatever desktop you're on:
+    a layer-shell surface on wlroots/Hyprland/niri, a registered wallpaper
+    type on Plasma, gsettings (and Hanabi, if present) on GNOME, the root
+    window on a bare X11 window manager. See `host()`.
   * **Drive the renderer with every knob it exposes** — per-output backgrounds,
     spanning, scaling/clamp, layer, fps, GPU/EGL selection, audio, effects, and
     the fullscreen-pause rules that keep a wallpaper from eating a game's frames.
@@ -43,6 +47,7 @@ def which(name: str) -> str | None:
 def forget_tools() -> None:
     """Drop the cache — after installing something, mid-session."""
     _WHICH.clear()
+    _HOST.clear()
 
 
 BIN = which("linux-wallpaperengine") or "linux-wallpaperengine"
@@ -425,9 +430,404 @@ def compositor() -> str:
 
 
 # linux-wallpaperengine finds fullscreen windows through wlr-foreign-toplevel /
-# hyprland IPC; KWin and Mutter expose neither, so "pause behind a game" is a
-# silent no-op there (the renderer says as much in renderer.log).
+# hyprland IPC; KWin and Mutter expose neither. That only matters when we're
+# forced onto layer-shell there — the Plasma wallpaper watches the task
+# manager itself, and a GNOME still has nothing to pause.
 FULLSCREEN_BLIND = ("kde", "gnome")
+
+
+def fullscreen_blind() -> bool:
+    return compositor() in FULLSCREEN_BLIND and host() == "layer"
+
+
+# --------------------------------------------------------------------------- #
+#  Hosts — who actually owns the desktop background
+# --------------------------------------------------------------------------- #
+#   layer   wlr-layer-shell surface (Hyprland, niri, sway, river, …)
+#   plasma  our own Plasma wallpaper type, configured over plasmashell's
+#           scripting D-Bus call — Plasma paints its desktop over any
+#           layer-shell "background", and under a "bottom" one we'd cover the
+#           icons, so being registered is the only way to *be* the wallpaper
+#   gnome   gsettings for stills; Hanabi for video when it's installed.
+#           Mutter has no layer-shell at all, so nothing else can draw there
+#   x11     the root window, for bare X11 window managers
+HOSTS = ("auto", "layer", "plasma", "gnome", "x11")
+_HOST: dict[str, str] = {}
+
+
+def host(opts: dict | None = None) -> str:
+    """Where the wallpaper goes on this desktop. An explicit `host` in the
+    options wins, then `FOSSYPAPER_HOST`, then what the session looks like."""
+    want = str((opts or {}).get("host") or "auto").lower()
+    if want in HOSTS and want != "auto":
+        return want
+    env = os.environ.get("FOSSYPAPER_HOST", "").lower()
+    if env in HOSTS and env != "auto":
+        return env
+    if opts is None:
+        # the frontends ask per row per keypress; read the saved choice once
+        if "cfg" not in _HOST:
+            try:
+                from . import config
+                _HOST["cfg"] = str(config.load().get("host") or "auto").lower()
+            except Exception:
+                _HOST["cfg"] = "auto"
+        if _HOST["cfg"] in HOSTS and _HOST["cfg"] != "auto":
+            return _HOST["cfg"]
+    return detect_host()
+
+
+def detect_host() -> str:
+    comp = compositor()
+    if comp == "kde":
+        return "plasma"
+    if comp == "gnome":
+        return "gnome"
+    if comp in ("hyprland", "niri", "sway"):
+        return "layer"
+    if (os.environ.get("XDG_SESSION_TYPE") == "x11"
+            or (os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"))):
+        return "x11"
+    return "layer"
+
+
+def kind_of(wp: Wallpaper) -> str:
+    """scene | video | image — what the file actually is, whatever the manifest says."""
+    s = wp.entry.suffix.lower() if wp.entry is not None else ""
+    if s in _VIDEO_EXT:
+        return "video"
+    if s in _IMAGE_EXT:
+        return "image"
+    return "scene"
+
+
+# Processes that draw their *own* backdrop on the background layer. With one
+# running, a "background" wallpaper would fight it for the same slot, so
+# `layer: auto` goes one up to "bottom" — above their backdrop, below windows.
+_BACKDROP_SHELLS = ("qs", "quickshell", "swaybg", "hyprpaper", "wpaperd", "wbg")
+
+
+def backdrop_shell() -> str:
+    for name in _BACKDROP_SHELLS:
+        if subprocess.run(["pgrep", "-x", name], capture_output=True).returncode == 0:
+            return name
+    return ""
+
+
+def resolved_layer(opts: dict) -> str:
+    layer = str(opts.get("layer") or "auto").lower()
+    if layer != "auto":
+        return layer
+    return "bottom" if backdrop_shell() else "background"
+
+
+def assets_dir(opts: dict) -> str:
+    """Wallpaper Engine's own shared assets — scenes reference them by name."""
+    if opts.get("assets_dir"):
+        return str(opts["assets_dir"])
+    for base in (Path.home() / ".local/share/Steam",
+                 Path.home() / ".steam/steam",
+                 Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam"):
+        d = base / "steamapps/common/wallpaper_engine/assets"
+        if d.is_dir():
+            return str(d)
+    return ""
+
+
+def _still_for(wp: Wallpaper, opts: dict) -> Path | None:
+    """A frame to show where this wallpaper can't animate."""
+    out = STATE / "stills" / f"{wp.id}.png"
+    if out.is_file() and out.stat().st_size > 0:
+        return out
+    return out if screenshot(wp.id, out, opts) else None
+
+
+# ---- Plasma ----------------------------------------------------------------- #
+PLASMA_PLUGIN = "org.fossypaper.wallpaper"
+_PLASMA_PREV = STATE / "plasma-previous.json"
+_SCENE_MODULE = "com/github/catsout/wallpaperEngineKde"
+
+
+def plasma_plugin_installed() -> bool:
+    return any((d / PLASMA_PLUGIN / "metadata.json").is_file() for d in (
+        Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "plasma/wallpapers",
+        Path("/usr/share/plasma/wallpapers")))
+
+
+def plasma_scene_module() -> Path | None:
+    """catsout's compiled SceneViewer, if installed. We load *only* that QML
+    type — never its wallpaper plugin, whose helper listens on a WebSocket."""
+    roots = [Path(p) for p in (os.environ.get("QML_IMPORT_PATH") or "").split(":") if p]
+    roots += [Path("/usr/lib/qt6/qml"), Path("/usr/lib64/qt6/qml"),
+              Path("/usr/lib/x86_64-linux-gnu/qt6/qml")]
+    for r in roots:
+        if (r / _SCENE_MODULE / "qmldir").is_file():
+            return r / _SCENE_MODULE
+    return None
+
+
+def _qdbus() -> str | None:
+    return which("qdbus6") or which("qdbus")
+
+
+def plasma_eval(script: str) -> tuple[bool, str]:
+    """Run a script in plasmashell. Its print() output comes back on stdout;
+    a locked desktop or a syntax error comes back as a D-Bus error."""
+    q = _qdbus()
+    if not q:
+        return False, "qdbus6 isn't installed (qt6-tools)"
+    try:
+        r = subprocess.run([q, "org.kde.plasmashell", "/PlasmaShell",
+                            "org.kde.PlasmaShell.evaluateScript", script],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout).strip() or f"exit {r.returncode}"
+    return True, r.stdout.strip()
+
+
+def plasma_config(wp: Wallpaper, opts: dict, still: Path | None) -> dict:
+    return {
+        "Kind": kind_of(wp),
+        # file:// URLs, percent-encoded here — a title with `#` or `%` in its
+        # path would break a URL glued together in QML
+        "Source": wp.entry.resolve().as_uri() if wp.entry is not None else "",
+        "Still": still.resolve().as_uri() if still else "",
+        "Assets": Path(assets_dir(opts)).resolve().as_uri() if assets_dir(opts) else "",
+        "Title": wp.title,
+        "Fit": {"fit": "fit", "stretch": "stretch"}.get(opts.get("scaling", ""), "fill"),
+        "Fps": int(opts.get("fps") or 30),
+        "Muted": bool(opts.get("silent", True)),
+        "Volume": int(opts.get("volume", 15)),
+        "FullscreenPause": bool(opts.get("fullscreen_pause", True)),
+        "PauseOnlyActive": bool(opts.get("pause_only_active", False)),
+    }
+
+
+def plasma_script(cfg: dict) -> str:
+    """Point every desktop at our wallpaper type, remembering what each one
+    had so `stop()` can put it back. Plasma keeps each type's own settings in
+    its own config group, so restoring the type name restores the lot."""
+    writes = "".join(f"  d.writeConfig({json.dumps(k)}, {json.dumps(v)});\n"
+                     for k, v in cfg.items())
+    return ("var prev = {};\n"
+            "desktops().forEach(function (d) {\n"
+            f"  if (d.wallpaperPlugin !== {json.dumps(PLASMA_PLUGIN)})\n"
+            "    prev[d.id] = d.wallpaperPlugin;\n"
+            f"  d.wallpaperPlugin = {json.dumps(PLASMA_PLUGIN)};\n"
+            f"  d.currentConfigGroup = ['Wallpaper', {json.dumps(PLASMA_PLUGIN)}, 'General'];\n"
+            f"{writes}"
+            "  d.reloadConfig();\n"
+            "});\n"
+            "print(JSON.stringify(prev));\n")
+
+
+def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
+    if not plasma_plugin_installed():
+        return False, ("the fossypaper Plasma wallpaper isn't installed — run ./install.sh, "
+                       "then `fossypaper apply` again")
+    kind = kind_of(wp)
+    live_scene = kind == "scene" and plasma_scene_module() is not None and assets_dir(opts)
+    still = _still_for(wp, opts) if kind == "scene" and not live_scene else None
+    ok, out = plasma_eval(plasma_script(plasma_config(wp, opts, still)))
+    if not ok:
+        return False, f"plasmashell refused the wallpaper — {out} (are the widgets locked?)"
+    try:
+        prev = json.loads(out.splitlines()[-1]) if out else {}
+    except ValueError:
+        prev = {}
+    if prev and not _PLASMA_PREV.is_file():
+        STATE.mkdir(parents=True, exist_ok=True)
+        _PLASMA_PREV.write_text(json.dumps(prev))
+    elif not _PLASMA_PREV.is_file():
+        _PLASMA_PREV.write_text("{}")
+    notes = []
+    if kind == "scene" and not live_scene:
+        notes.append("still frame only: " + (
+            "no Wallpaper Engine assets folder found" if plasma_scene_module()
+            else "no native scene renderer (plasma6-wallpapers-wallpaper-engine-git)"))
+    if kind == "scene" and (opts.get("properties") or wp.preset_overrides):
+        notes.append("its custom properties aren't applied on Plasma yet")
+    return True, "applied as a Plasma wallpaper" + "".join(" — " + n for n in notes)
+
+
+def _plasma_restore() -> None:
+    if not _PLASMA_PREV.is_file():
+        return
+    try:
+        prev = json.loads(_PLASMA_PREV.read_text() or "{}")
+    except ValueError:
+        prev = {}
+    fallback = "org.kde.image"
+    script = ("var prev = " + json.dumps(prev) + ";\n"
+              "desktops().forEach(function (d) {\n"
+              f"  if (d.wallpaperPlugin === {json.dumps(PLASMA_PLUGIN)})\n"
+              f"    d.wallpaperPlugin = prev[d.id] || {json.dumps(fallback)};\n"
+              "});\n")
+    ok, _ = plasma_eval(script)
+    if ok:
+        _PLASMA_PREV.unlink(missing_ok=True)
+
+
+# ---- GNOME ------------------------------------------------------------------ #
+_GNOME_PREV = STATE / "gnome-previous.json"
+_GNOME_BG = "org.gnome.desktop.background"
+_HANABI = "io.github.jeffshee.hanabi-extension"
+
+
+def _gsettings(*args: str) -> tuple[bool, str]:
+    if not which("gsettings"):
+        return False, "gsettings isn't installed"
+    try:
+        r = subprocess.run(["gsettings", *args], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    return r.returncode == 0, (r.stdout if r.returncode == 0 else r.stderr).strip()
+
+
+def _gv(text: str) -> str:
+    """A string as GVariant text, so gsettings never has to guess."""
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def hanabi_available() -> bool:
+    """Hanabi is the GNOME extension that plays a video as the wallpaper. Only
+    use it if its schema *and* the key we write are really there."""
+    ok, keys = _gsettings("list-keys", _HANABI)
+    return ok and "video-path" in keys.split()
+
+
+def _gnome_save_previous() -> None:
+    if _GNOME_PREV.is_file():
+        return
+    prev = {}
+    for key in ("picture-uri", "picture-uri-dark", "picture-options"):
+        ok, v = _gsettings("get", _GNOME_BG, key)
+        if ok:
+            prev[key] = v
+    if hanabi_available():
+        ok, v = _gsettings("get", _HANABI, "video-path")
+        if ok:
+            prev["hanabi:video-path"] = v
+    STATE.mkdir(parents=True, exist_ok=True)
+    _GNOME_PREV.write_text(json.dumps(prev))
+
+
+def _gnome_set_picture(path: Path, opts: dict) -> tuple[bool, str]:
+    uri = path.resolve().as_uri()
+    option = {"fit": "scaled", "stretch": "stretched"}.get(opts.get("scaling", ""), "zoom")
+    for key, val in (("picture-uri", _gv(uri)), ("picture-uri-dark", _gv(uri)),
+                     ("picture-options", _gv(option))):
+        ok, err = _gsettings("set", _GNOME_BG, key, val)
+        if not ok:
+            return False, err
+    return True, ""
+
+
+def _start_gnome(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
+    _gnome_save_previous()
+    kind = kind_of(wp)
+    if kind == "video" and hanabi_available():
+        ok, err = _gsettings("set", _HANABI, "video-path", _gv(str(wp.entry)))
+        if ok:
+            return True, "applied via Hanabi"
+    if hanabi_available():
+        # a video left in Hanabi keeps playing on top of whatever we set next
+        _gsettings("set", _HANABI, "video-path", "''")
+    pic = wp.entry if kind == "image" else _still_for(wp, opts)
+    if pic is None:
+        return False, "couldn't produce a still frame for GNOME to show"
+    ok, err = _gnome_set_picture(pic, opts)
+    if not ok:
+        return False, f"gsettings refused the wallpaper — {err}"
+    if kind == "image":
+        return True, "applied as the GNOME background"
+    why = "GNOME has no layer-shell, so scenes can't animate there" if kind == "scene" \
+        else "install the Hanabi extension to play videos"
+    return True, f"applied as a still frame — {why}"
+
+
+def _gnome_restore() -> None:
+    if not _GNOME_PREV.is_file():
+        return
+    try:
+        prev = json.loads(_GNOME_PREV.read_text() or "{}")
+    except ValueError:
+        prev = {}
+    if hanabi_available() and "hanabi:video-path" not in prev:
+        _gsettings("set", _HANABI, "video-path", "''")
+    for key, val in prev.items():
+        # gsettings get prints GVariant text ('file:///…'); set parses the same
+        schema, _, key = key.rpartition(":")
+        _gsettings("set", _HANABI if schema == "hanabi" else _GNOME_BG, key, val)
+    _GNOME_PREV.unlink(missing_ok=True)
+
+
+# ---- X11 (bare window managers — untested) ---------------------------------- #
+_X11_PID = STATE / "x11-video.pgid"
+
+
+def _x11_still_tool() -> str | None:
+    return which("xwallpaper") or which("feh")
+
+
+def _x11_can(wp: Wallpaper) -> bool:
+    k = kind_of(wp)
+    if k == "scene":
+        return have_renderer()
+    if k == "video":
+        return bool(which("xwinwrap") and which("mpv"))
+    return bool(_x11_still_tool())
+
+
+def _x11_needs(wp: Wallpaper) -> str:
+    return {"scene": "linux-wallpaperengine", "video": "xwinwrap + mpv"}.get(
+        kind_of(wp), "xwallpaper or feh")
+
+
+def _start_x11_still(wp: Wallpaper, opts: dict):
+    tool = _x11_still_tool()
+    mode = opts.get("scaling", "")
+    if tool and tool.endswith("xwallpaper"):
+        flag = {"fit": "--maximize", "stretch": "--stretch"}.get(mode, "--zoom")
+        subprocess.run([tool, flag, str(wp.entry)], capture_output=True, timeout=10)
+    elif tool:
+        flag = {"fit": "--bg-max", "stretch": "--bg-scale"}.get(mode, "--bg-fill")
+        subprocess.run([tool, "--no-fehbg", flag, str(wp.entry)], capture_output=True, timeout=10)
+
+
+def _start_x11_video(wp: Wallpaper, opts: dict):
+    """xwinwrap makes a desktop-type window under everything; mpv draws in it."""
+    mo = ["--loop-file=inf", "--no-osc", "--no-input-default-bindings", "--hwdec=auto-safe",
+          "--no-audio" if opts.get("silent", True) else f"--volume={opts.get('volume', 15)}"]
+    if opts.get("scaling") == "fill":
+        mo.append("--panscan=1.0")
+    elif opts.get("scaling") == "stretch":
+        mo.append("--keepaspect=no")
+    argv = ["xwinwrap", "-fs", "-ov", "-ni", "-nf", "-un", "-s", "-st", "-sp", "-b", "-fdt",
+            "--", "mpv", "--wid=%WID", *mo, str(wp.entry)]
+    env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
+    _spawn(argv, env)
+    STATE.mkdir(parents=True, exist_ok=True)
+    _X11_PID.write_text(str(_spawned[-1].pid))
+
+
+def _x11_video_alive() -> bool:
+    try:
+        os.killpg(int(_X11_PID.read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _x11_video_stop() -> None:
+    import signal
+    try:
+        os.killpg(int(_X11_PID.read_text()), signal.SIGTERM)
+    except (OSError, ValueError):
+        pass
+    _X11_PID.unlink(missing_ok=True)
 
 
 def _outputs_wlr() -> list[str]:
@@ -482,8 +882,21 @@ def backend_of(wid: str) -> tuple[str, bool]:
 
 
 def backend_for(wp: Wallpaper) -> tuple[str, bool]:
+    """(backend, usable here). The backend names the *kind* of renderer a
+    wallpaper needs; whether it's usable depends on the desktop too — Plasma
+    and GNOME draw it themselves, so the layer-shell tools don't matter there."""
     if wp.type in _UNSUPPORTED:
         return wp.type, False
+    be, ok = _layer_backend_for(wp)
+    h = host()
+    if h in ("plasma", "gnome"):
+        return be, True           # always something to show: live, or its still
+    if h == "x11":
+        return be, _x11_can(wp)
+    return be, ok
+
+
+def _layer_backend_for(wp: Wallpaper) -> tuple[str, bool]:
     if wp.entry is not None and wp.entry.suffix.lower() in _VIDEO_EXT:
         return "mpvpaper", bool(which("mpvpaper"))
     if wp.entry is not None and wp.entry.suffix.lower() == ".pkg":
@@ -534,15 +947,31 @@ def backends_status() -> dict:
 
 
 def is_running() -> bool:
+    # the markers outlive a session: a Plasma wallpaper set yesterday says
+    # nothing about whether anything is drawing under Hyprland today
+    h = host()
+    if (h == "plasma" and _PLASMA_PREV.is_file()) or (h == "gnome" and _GNOME_PREV.is_file()):
+        return True
     return any(subprocess.run(["pgrep", "-x", c], capture_output=True).stdout.strip()
-               for c in _MANAGED)
+               for c in _MANAGED) or _x11_video_alive()
 
 
-def stop():
+def stop(keep: str = ""):
+    """Take the wallpaper down on every host we might have put it on.
+    `keep` names a host we're about to re-apply on — don't restore the
+    desktop's old wallpaper only to replace it a moment later."""
     for c in _MANAGED:
         subprocess.run(["pkill", "-x", c], capture_output=True)
     if which("swww"):
-        subprocess.run(["swww", "clear"], capture_output=True, timeout=5)
+        try:
+            subprocess.run(["swww", "clear"], capture_output=True, timeout=5)
+        except subprocess.SubprocessError:
+            pass
+    _x11_video_stop()
+    if keep != "plasma":
+        _plasma_restore()
+    if keep != "gnome":
+        _gnome_restore()
 
 
 # --------------------------------------------------------------------------- #
@@ -561,7 +990,9 @@ def build_argv(wid: str, opts: dict) -> list[str]:
             a += ["--screen-root", out, "--bg", wid]
             a += _per_output(opts)
 
-    a += ["--layer", opts.get("layer") or "bottom", "--fps", str(opts.get("fps") or 30)]
+    if host(opts) != "x11":
+        a += ["--layer", resolved_layer(opts)]
+    a += ["--fps", str(opts.get("fps") or 30)]
 
     if opts.get("silent", True):
         a += ["--silent"]
@@ -622,9 +1053,12 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
     be, ok = backend_for(wp)
     if be in _UNSUPPORTED:
         return False, why_unsupported(wp) or _UNSUPPORTED[be]
+    h = host(opts)
     if not ok:
+        if h == "x11":
+            return False, f"this one needs {_x11_needs(wp)} on X11, which isn't installed"
         return False, f"this one renders via {be}, which isn't installed — paru -S {be}"
-    stop()
+    stop(keep=h)
     STATE.mkdir(parents=True, exist_ok=True)
     RENDER_LOG.write_text("")
     _spawned.clear()
@@ -633,8 +1067,16 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
         # The preset's own values go first; anything the user set by hand for
         # this wallpaper wins over them.
         opts = {**opts, "properties": {**wp.preset_overrides, **(opts.get("properties") or {})}}
+    if h == "plasma":
+        return _start_plasma(wp, opts)
+    if h == "gnome":
+        return _start_gnome(wp, opts)
     try:
-        {"mpvpaper": _start_mpvpaper, "swww": _start_swww, "wpe": _start_wpe}[be](wp, opts)
+        if h == "x11":
+            {"video": _start_x11_video, "image": _start_x11_still,
+             "scene": _start_wpe}[kind_of(wp)](wp, opts)
+        else:
+            {"mpvpaper": _start_mpvpaper, "swww": _start_swww, "wpe": _start_wpe}[be](wp, opts)
     except OSError as e:
         return False, f"{be} wouldn't start: {e}"
     dead = _died_early(float(opts.get("verify_grace", 1.5)))
@@ -716,7 +1158,7 @@ def _start_mpvpaper(wp: Wallpaper, opts: dict):
     elif scale == "stretch":
         mo.append("keepaspect=no")
 
-    base = ["mpvpaper", "-l", opts.get("layer") or "bottom", "-o", " ".join(mo)]
+    base = ["mpvpaper", "-l", resolved_layer(opts), "-o", " ".join(mo)]
     if opts.get("fullscreen_pause", True):
         # -p pauses seamlessly; -a FULL extends that to any fullscreen window.
         base = base[:1] + ["-p", "-a", "FULL"] + base[1:]
@@ -756,17 +1198,41 @@ def screenshot(wid: str, out: Path, opts: dict) -> bool:
     if have_renderer():
         env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
         render_id = wp.render_id if wp is not None else wid
-        try:
-            subprocess.run([BIN, "--screenshot", str(out), "--screenshot-delay", "90",
-                            "--silent", render_id], env=env, capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            pass
-        if out.is_file():
+        out.unlink(missing_ok=True)
+        if _render_one_frame([BIN, "--screenshot", str(out), "--screenshot-delay", "90",
+                              "--silent", render_id], env, out):
             return True
     # Last resort: the wallpaper's own preview is a fair likeness of its palette.
     if wp is not None and wp.preview is not None:
         return _still_from_image(wp.preview, out)
     return False
+
+
+def _render_one_frame(argv, env, out: Path, timeout: float = 60) -> bool:
+    """The renderer writes its screenshot and then keeps running. Wait for the
+    file to land and stop growing, then put it down — rather than sitting out
+    the whole timeout on every apply."""
+    try:
+        proc = subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    except OSError:
+        return False
+    deadline, last = time.monotonic() + timeout, -1
+    try:
+        while time.monotonic() < deadline and proc.poll() is None:
+            size = out.stat().st_size if out.is_file() else -1
+            if size > 0 and size == last:
+                break
+            last = size
+            time.sleep(0.3)
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.wait()
+    return out.is_file() and out.stat().st_size > 0
 
 
 THUMBS = Path.home() / ".cache/fossypaper/library"
