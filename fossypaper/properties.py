@@ -55,7 +55,9 @@ def from_project(folder: Path) -> list[Property]:
         meta = json.loads((folder / "project.json").read_text(encoding="utf-8", errors="replace"))
     except (OSError, ValueError):
         return []
-    raw = ((meta.get("general") or {}).get("properties") or {})
+    general = meta.get("general") or {}
+    raw = general.get("properties") or {}
+    loc = _localization(general.get("localization"))
     props = []
     for key, spec in raw.items():
         if not isinstance(spec, dict):
@@ -63,10 +65,12 @@ def from_project(folder: Path) -> list[Property]:
         kind = str(spec.get("type") or "text").lower()
         if kind not in EDITABLE and kind not in DECORATIVE:
             continue                      # usershortcut and friends: nothing we can drive
+        if key in HIDDEN:
+            continue
         props.append(Property(
             key=key,
             kind=kind,
-            text=str(spec.get("text") or key),
+            text=label(spec.get("text"), key, loc),
             value=_str(spec.get("value")),
             mn=_num(spec.get("min"), 0.0),
             mx=_num(spec.get("max"), 1.0),
@@ -79,6 +83,50 @@ def from_project(folder: Path) -> list[Property]:
         ))
     props.sort(key=lambda p: (p.order, p.key))
     return props
+
+
+# Wallpaper Engine's own UI accent. Every wallpaper carries it and the renderer
+# ignores it, so offering it as a knob is a control that does nothing.
+HIDDEN = ("schemecolor",)
+
+# Wallpaper Engine's built-in string keys, for wallpapers that don't ship a
+# localization table of their own.
+_KNOWN = {
+    "ui_browse_properties_scheme_color": "Scheme colour",
+    "ui_browse_properties_alignment": "Alignment",
+    "ui_browse_properties_audio_volume": "Volume",
+    "ui_browse_properties_rate": "Playback rate",
+}
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _localization(raw) -> dict:
+    """general.localization is {"en-us": {"ui_key": "Text"}, ...}."""
+    if not isinstance(raw, dict):
+        return {}
+    for lang in ("en-us", "en", "en-gb"):
+        table = raw.get(lang)
+        if isinstance(table, dict):
+            return {str(k): str(v) for k, v in table.items()}
+    return {}
+
+
+def label(text, key: str, loc: dict | None = None) -> str:
+    """What to call a knob: the wallpaper's own translation, a known WE key, the
+    text with its HTML stripped, or — last — a humanised key. Authors use
+    headings like `<br></br><u><h4>Colour Settings:</h4></u>`; a label is not
+    the place for markup."""
+    t = str(text or "").strip()
+    if loc and t in loc:
+        t = loc[t]
+    elif t in _KNOWN:
+        t = _KNOWN[t]
+    t = t.replace("[info]", "")
+    t = " ".join(_TAG.sub(" ", t).split()).strip(" :")
+    if not t or re.fullmatch(r"ui_[a-z0-9_]+", t):
+        base = re.sub(r"^ui_(browse_)?(properties_)?", "", t or key)
+        t = base.replace("_", " ").strip().capitalize() or key
+    return t
 
 
 def _str(v) -> str:

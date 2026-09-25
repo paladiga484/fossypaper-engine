@@ -292,9 +292,15 @@ def cmd_doctor(a):
     print(f"library roots : {engine.WE_DIR}")
     print(f"wallpapers    : {len(lib)}  ({len(bad)} not renderable here)")
     print(f"outputs       : {', '.join(engine.outputs()) or 'none detected'}")
+    comp = engine.compositor()
+    print(f"compositor    : {comp}")
     print(f"theme backends: {', '.join(engine.theme_backends())}\n")
     for name, ok, why in lines:
         print(f"  [{'x' if ok else ' '}] {name:24} {why}")
+    if comp in engine.FULLSCREEN_BLIND:
+        print(f"\n  ! {comp} gives the renderer no way to see fullscreen windows, so the")
+        print("    wallpaper keeps rendering behind games. Turn it off before playing")
+        print("    (`fossypaper off`, or `fossypaper toggle` on a hotkey).")
     if bad:
         print("\nnot renderable:")
         for w in bad[:10]:

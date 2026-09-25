@@ -199,12 +199,43 @@ class LibraryTest(unittest.TestCase):
         preset's own (assetless) id."""
         from unittest.mock import patch
         with patch.object(engine, "have_renderer", return_value=True), \
+             patch.object(engine, "stop"), \
+             patch.object(engine, "STATE", self.root), \
+             patch.object(engine, "RENDER_LOG", self.root / "renderer.log"), \
              patch.object(engine, "_spawn") as spawn:
             ok, msg = engine.start("1009", config.opts(dict(config.DEFAULTS)))
         self.assertTrue(ok, msg)
         argv = spawn.call_args[0][0]
         self.assertEqual(argv[argv.index("--bg") + 1], "1001")
         self.assertTrue(any(a.startswith("custombgimage=") for a in argv))
+
+    def test_a_renderer_that_dies_at_once_is_a_failure_not_applied(self):
+        """start() used to say 'applied' the moment it spawned, with the
+        renderer's stderr in /dev/null. A renderer that exits on its first frame
+        has to come back as a failure that quotes its own last words."""
+        from unittest.mock import patch
+        fake = [sys.executable, "-c", "import sys; print('no GL context for you'); sys.exit(3)"]
+        with patch.object(engine, "have_renderer", return_value=True), \
+             patch.object(engine, "stop"), \
+             patch.object(engine, "STATE", self.root), \
+             patch.object(engine, "RENDER_LOG", self.root / "renderer.log"), \
+             patch.object(engine, "build_argv", return_value=fake):
+            ok, msg = engine.start("1001", config.opts(dict(config.DEFAULTS)))
+        self.assertFalse(ok)
+        self.assertIn("no GL context for you", msg)
+
+    def test_a_renderer_that_stays_up_is_applied(self):
+        from unittest.mock import patch
+        fake = [sys.executable, "-c", "import time; time.sleep(5)"]
+        with patch.object(engine, "have_renderer", return_value=True), \
+             patch.object(engine, "stop"), \
+             patch.object(engine, "STATE", self.root), \
+             patch.object(engine, "RENDER_LOG", self.root / "renderer.log"), \
+             patch.object(engine, "build_argv", return_value=fake):
+            ok, msg = engine.start("1001", {**config.opts(dict(config.DEFAULTS)), "verify_grace": 0.4})
+        for proc in engine._spawned:
+            proc.kill(); proc.wait()
+        self.assertTrue(ok, msg)
 
 
 class ArgvTest(unittest.TestCase):
@@ -298,6 +329,21 @@ class PropertyTest(unittest.TestCase):
         self.assertTrue(properties.visible(p, {}))
         p.condition = "missingkey.value == 3"
         self.assertTrue(properties.visible(p, {}))
+
+    def test_labels_lose_markup_and_ui_keys(self):
+        self.assertEqual(properties.label("<br></br><u><h4>Colour Settings:</h4></u></h5>", "k"),
+                         "Colour Settings")
+        self.assertEqual(properties.label("Notes<sup><abbr title='x'>[info]</abbr></sup>", "k"), "Notes")
+        self.assertEqual(properties.label("ui_browse_properties_scheme_color", "k"), "Scheme colour")
+        self.assertEqual(properties.label("ui_custom_glow_amount", "k"), "Custom glow amount")
+        self.assertEqual(properties.label("ui_mine", "k", {"ui_mine": "Mine!"}), "Mine!")
+        self.assertEqual(properties.label("", "fallback_key"), "Fallback key")
+
+    def test_scheme_colour_is_not_offered_as_a_knob(self):
+        (self.folder / "project.json").write_text(json.dumps({"general": {"properties": {
+            "schemecolor": {"type": "color", "text": "ui_browse_properties_scheme_color",
+                            "value": "0 0 0"}}}}))
+        self.assertEqual(properties.from_project(self.folder), [])
 
     def test_colours_round_trip_in_we_wire_format(self):
         self.assertEqual(properties.color_to_rgb("0.5 0.25 1"), (0.5, 0.25, 1.0))

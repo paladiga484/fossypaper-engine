@@ -378,7 +378,7 @@ def outputs() -> list[str]:
     """Ask the compositor first. DRM connector names and the names a compositor
     hands to layer-shell can disagree — a MUX switch renames the panel, and
     `--screen-root` only accepts the compositor's name."""
-    for probe in (_outputs_hypr, _outputs_niri, _outputs_wlr, _outputs_drm):
+    for probe in (_outputs_hypr, _outputs_niri, _outputs_kde, _outputs_wlr, _outputs_drm):
         try:
             got = probe()
         except (OSError, subprocess.SubprocessError, ValueError, KeyError):
@@ -401,6 +401,33 @@ def _outputs_niri() -> list[str]:
     r = subprocess.run(["niri", "msg", "-j", "outputs"], capture_output=True, text=True, timeout=5)
     data = json.loads(r.stdout)
     return sorted(data) if isinstance(data, dict) else [o["name"] for o in data]
+
+
+def _outputs_kde() -> list[str]:
+    if not which("kscreen-doctor") or "KDE" not in os.environ.get("XDG_CURRENT_DESKTOP", ""):
+        return []
+    r = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, timeout=5)
+    return [o["name"] for o in json.loads(r.stdout).get("outputs", [])
+            if o.get("name") and o.get("connected") and o.get("enabled")]
+
+
+def compositor() -> str:
+    """Which compositor we're drawing under, as far as the environment says."""
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return "hyprland"
+    if os.environ.get("NIRI_SOCKET"):
+        return "niri"
+    desk = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    for name in ("kde", "gnome", "sway"):
+        if name in desk:
+            return name
+    return desk or "unknown"
+
+
+# linux-wallpaperengine finds fullscreen windows through wlr-foreign-toplevel /
+# hyprland IPC; KWin and Mutter expose neither, so "pause behind a game" is a
+# silent no-op there (the renderer says as much in renderer.log).
+FULLSCREEN_BLIND = ("kde", "gnome")
 
 
 def _outputs_wlr() -> list[str]:
@@ -598,6 +625,9 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
     if not ok:
         return False, f"this one renders via {be}, which isn't installed — paru -S {be}"
     stop()
+    STATE.mkdir(parents=True, exist_ok=True)
+    RENDER_LOG.write_text("")
+    _spawned.clear()
     opts = {**opts, "no_audio_processing": not wants_audio(wp, opts)}
     if wp.preset_overrides:
         # The preset's own values go first; anything the user set by hand for
@@ -607,12 +637,49 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
         {"mpvpaper": _start_mpvpaper, "swww": _start_swww, "wpe": _start_wpe}[be](wp, opts)
     except OSError as e:
         return False, f"{be} wouldn't start: {e}"
+    dead = _died_early(float(opts.get("verify_grace", 1.5)))
+    if dead is not None:
+        why = "; ".join(render_log_tail(2)) or f"exit code {dead.returncode}"
+        return False, f"{be} exited straight away — {why} (full log: {RENDER_LOG})"
     return True, f"applied via {be}"
 
 
+RENDER_LOG = STATE / "renderer.log"
+_spawned: list = []
+
+
 def _spawn(argv, env=None):
-    subprocess.Popen(argv, env=env, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True)
+    """Start a renderer detached, with its output in RENDER_LOG (rewritten on
+    every apply) — a renderer that dies on its first frame used to vanish into
+    /dev/null while the app said "applied"."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(RENDER_LOG, "a", encoding="utf-8") as log:
+        log.write("$ " + " ".join(argv) + "\n")
+        log.flush()
+        _spawned.append(subprocess.Popen(argv, env=env, stdout=log, stderr=log,
+                                         stdin=subprocess.DEVNULL, start_new_session=True))
+
+
+def _died_early(grace: float) -> subprocess.Popen | None:
+    """The first renderer that exits within `grace` seconds, if any."""
+    deadline = time.monotonic() + grace
+    while _spawned and time.monotonic() < deadline:
+        for proc in _spawned:
+            if proc.poll() is not None:
+                return proc
+        time.sleep(0.1)
+    return None
+
+
+def render_log_tail(n: int = 4) -> list[str]:
+    """The last few lines worth reading, noise filtered out."""
+    try:
+        lines = RENDER_LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    keep = [ln.strip() for ln in lines
+            if ln.strip() and not ln.startswith(("$ ", "Resolving require module"))]
+    return keep[-n:]
 
 
 def _start_wpe(wp: Wallpaper, opts: dict):
