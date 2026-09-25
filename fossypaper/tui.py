@@ -47,8 +47,34 @@ LAYER_CYCLE = ["bottom", "background", "top"]
 GPU_CYCLE = ["auto", "nvidia", "mesa"]
 SCALE_CYCLE = ["", "default", "stretch", "fit", "fill"]
 AUDIO_CYCLE = ["auto", "always", "never"]
-TAG = {"wpe": "scene", "mpvpaper": "video", "swww": "image",
+TAG = {"wpe": "scene", "mpvpaper": "video", "swww": "still",
        "web": " web ", "application": " app "}
+KINDS = [None, "scene", "video", "still", "audio"]       # c cycles the library through these
+KIND_LABEL = {None: "", "scene": "scenes", "video": "video", "still": "stills", "audio": "reactive"}
+SORTS = ["title", "new", "kind"]                          # S cycles
+SORT_LABEL = {"title": "", "new": "newest", "kind": "by kind"}
+
+
+def _utf8() -> bool:
+    import locale
+    return "utf" in (locale.getpreferredencoding(False) or "").lower()
+
+
+# Box drawing and marks: rounded Unicode where the terminal speaks UTF-8,
+# plain ASCII where it doesn't (a linux console, a stripped-down ssh).
+if _utf8():
+    BOX = ("╭", "╮", "╰", "╯", "─", "│")
+    NOW, HAVE, BLOCK, PLAY, STOP = "▶", "✓", "██", "▶ playing", "■ stopped"
+else:
+    BOX = ("+", "+", "+", "+", "-", "|")
+    NOW, HAVE, BLOCK, PLAY, STOP = "*", "*", "##", "playing", "stopped"
+
+
+def kind_of(w) -> str:
+    be, _ok = engine.backend_for(w)
+    if be == "mpvpaper" and w.type == "image":
+        return "still"
+    return TAG.get(be, be)
 
 # colour roles -> curses pair ids. Foregrounds only; the background stays the
 # terminal's own (-1), which is what makes this match your theme.
@@ -120,16 +146,19 @@ def _put(win, y, x, s, attr=0):
         pass
 
 
-def _box(win, y, x, h, w, title=""):
+def _box(win, y, x, h, w, title="", tail=""):
     if h < 2 or w < 4:
         return
-    _put(win, y, x, "+" + "-" * (w - 2) + "+", A(DIM))
+    tl, tr, bl, br, hz, vt = BOX
+    _put(win, y, x, tl + hz * (w - 2) + tr, A(DIM))
     for i in range(1, h - 1):
-        _put(win, y + i, x, "|", A(DIM))
-        _put(win, y + i, x + w - 1, "|", A(DIM))
-    _put(win, y + h - 1, x, "+" + "-" * (w - 2) + "+", A(DIM))
+        _put(win, y + i, x, vt, A(DIM))
+        _put(win, y + i, x + w - 1, vt, A(DIM))
+    _put(win, y + h - 1, x, bl + hz * (w - 2) + br, A(DIM))
     if title:
         _put(win, y, x + 2, f" {title} ", A(ACCENT))
+    if tail:
+        _put(win, y, x + 4 + cells(title) + 1, f" {tail} ", A(DIM))
 
 
 # --------------------------------------------------------------------------- #
@@ -150,6 +179,9 @@ class State:
         # should not cost either.
         self.running = engine.is_running()
         self._knobs: dict = {}
+        self.kind = None
+        self.sort = self.cfg.get("ui_sort", "title") if self.cfg.get("ui_sort") in SORTS else "title"
+        self.scr = None
 
     def knobs(self, wid: str) -> int:
         if wid not in self._knobs:
@@ -174,10 +206,22 @@ class State:
 
     # -- library ---------------------------------------------------------- #
     def view(self):
-        if not self.filter:
-            return self.lib
         f = self.filter.lower()
-        return [w for w in self.lib if f in w.title.lower() or f in w.id]
+        out = []
+        for w in self.lib:
+            if self.kind == "audio" and not w.audio:
+                continue
+            if self.kind and self.kind != "audio" and kind_of(w) != self.kind:
+                continue
+            if f and f not in w.title.lower() and f not in w.id \
+                    and not any(f in str(t).lower() for t in w.tags):
+                continue
+            out.append(w)
+        if self.sort == "new":
+            out.sort(key=lambda w: _mtime(w.folder), reverse=True)
+        elif self.sort == "kind":
+            out.sort(key=lambda w: (kind_of(w), w.title.lower()))
+        return out
 
     def current(self):
         v = self.view()
@@ -209,12 +253,12 @@ def _header(scr, st, W):
     _put(scr, 1, bx, "now     ", A(DIM))
     _put(scr, 1, bx + 9, title[: max(0, W - bx - 11)], A(VALUE))
     _put(scr, 2, bx, "state   ", A(DIM))
-    _put(scr, 2, bx + 9, "playing" if st.running else "stopped",
+    _put(scr, 2, bx + 9, PLAY if st.running else STOP,
          A(OK) if st.running else A(DIM))
     if st.palette:
         _put(scr, 3, bx, "palette ", A(DIM))
         for i, hexv in enumerate(st.palette[:8]):
-            _put(scr, 3, bx + 9 + i * 3, "###", A(_swatch(i, hexv)))
+            _put(scr, 3, bx + 9 + i * 3, BLOCK, A(_swatch(i, hexv)))
     # the status column is four rows; a one-line wordmark must not let the
     # panes start on top of it
     return max(len(logo), 4)
@@ -248,8 +292,10 @@ def _draw_library(scr, st, top_y, H, W):
     listw = max(30, min(W // 2, 60))
     listh = H - top_y - 2
 
-    title = f"LIBRARY {len(view)}" + (f"  /{st.filter}" if st.filter else "")
-    _box(scr, top_y, 1, listh, listw, title)
+    title = f"LIBRARY {len(view)}"
+    tail = "  ".join(x for x in (KIND_LABEL[st.kind], SORT_LABEL[st.sort],
+                                 f"/{st.filter}" if st.filter else "") if x)
+    _box(scr, top_y, 1, listh, listw, title, tail)
     rows = listh - 2
     if st.sel < st.top:
         st.top = st.sel
@@ -262,14 +308,14 @@ def _draw_library(scr, st, top_y, H, W):
             break
         w = view[i]
         be, ok = engine.backend_for(w)
-        mark = "*" if w.id == cur else " "
-        badge = TAG.get(be, be)[:5]
+        mark = NOW if w.id == cur else " "
+        badge = kind_of(w)[:5]
         line = pad(f" {mark} {w.title}", listw - 11) + "  "
         if i == st.sel:
             _put(scr, top_y + 1 + r, 2, pad(line + badge, listw - 3), SEL)
         else:
-            _put(scr, top_y + 1 + r, 2, line, A())
-            _put(scr, top_y + 1 + r, 2 + listw - 9, badge, A(OK) if ok else A(WARN))
+            _put(scr, top_y + 1 + r, 2, line, A(ACCENT) if w.id == cur else A())
+            _put(scr, top_y + 1 + r, 2 + listw - 9, badge, A(DIM) if ok else A(WARN))
 
     rx = listw + 2
     rw = W - rx - 1
@@ -278,7 +324,7 @@ def _draw_library(scr, st, top_y, H, W):
     _box(scr, top_y, rx, listh, rw, "DETAILS")
     w = st.current()
     if w is None:
-        _put(scr, top_y + 2, rx + 3, "library is empty", A(DIM))
+        _put(scr, top_y + 2, rx + 3, "nothing matches" if st.lib else "library is empty", A(DIM))
         return
     be, ok = engine.backend_for(w)
     reason = engine.why_unsupported(w)
@@ -292,7 +338,8 @@ def _draw_library(scr, st, top_y, H, W):
     for k, v, col in (("title", w.title, VALUE), ("id", w.id, 0),
                       ("kind", kind, 0), ("renders", renders, 0 if ok else WARN),
                       ("audio", "reactive" if w.audio else "silent", 0),
-                      ("knobs", str(st.knobs(w.id)), 0)):
+                      ("knobs", str(st.knobs(w.id)), 0),
+                      ("tags", ", ".join(str(t) for t in w.tags[:4]) or "-", DIM)):
         _put(scr, y, rx + 2, f"{k:>8}", A(DIM))
         _put(scr, y, rx + 11, fit(v, rw - 13), A(col))
         y += 1
@@ -312,7 +359,9 @@ def _draw_library(scr, st, top_y, H, W):
                  ("o  output", o["output"] or "all"),
                  ("a  audio", o["audio_processing"]),
                  ("m  mute", "on" if o["silent"] else f"vol {o['volume']}"),
-                 ("x  pause", "on fullscreen" if o["fullscreen_pause"] else "never")):
+                 ("x  pause", ("on fullscreen" + ("  (blind on " + engine.compositor() + ")"
+                                                   if engine.compositor() in engine.FULLSCREEN_BLIND
+                                                   else "")) if o["fullscreen_pause"] else "never")):
         if y >= top_y + listh - 2:
             break
         _put(scr, y, rx + 2, f"{k:<12}", A(DIM))
@@ -383,7 +432,7 @@ def _draw_browse(scr, st, top_y, H, W):
         if i >= len(st.rows):
             break
         row = st.rows[i]
-        have = "*" if row.installed() else " "
+        have = HAVE if row.installed() else " "
         line = f" {have} {row.id:12} " + pad(row.title, 44) + " " + row.meta
         y = top_y + 1 + r
         if i == st.row_sel:
@@ -400,7 +449,10 @@ HELP = [
     ("p", "property editor for this wallpaper"),
     ("b", "browse Wallhaven and the Steam Workshop"),
     ("t", "sync a colour theme from its pixels"),
-    ("/", "filter the library (esc clears)"),
+    ("/", "filter the library by title, id or tag (esc clears)"),
+    ("c", "cycle kind: all, scenes, video, stills, reactive"),
+    ("S", "cycle sort: a-z, newest, by kind"),
+    ("z", "shuffle: apply a random one from what's shown"),
     ("r", "rescan the library"),
     ("f l v s o a m x", "fps, layer, gpu, scaling, output, audio, mute, pause"),
     ("R", "reset this wallpaper's properties"),
@@ -421,7 +473,7 @@ def _draw_help(scr, st, top_y, H, W):
 
 
 FOOTERS = {
-    "library": " j/k move   enter apply   space stop   p props   b browse   t theme   / filter   ? keys   q quit",
+    "library": " j/k move   enter apply   space stop   z shuffle   c kind   S sort   / filter   p props   b browse   ? keys   q quit",
     "props":   " j/k move   h/l adjust   space toggle   e edit   R reset   enter apply   esc back",
     "browse":  " j/k move   / search   tab source   n/N page   enter get   o open page   esc back",
     "help":    " any key returns",
@@ -452,6 +504,10 @@ def _draw(scr, st):
 #  Actions
 # --------------------------------------------------------------------------- #
 def _apply(st, wid):
+    w = next((x for x in st.lib if x.id == wid), None)
+    st.status = f"starting {w.title if w else wid}..."
+    if st.scr is not None:
+        _draw(st.scr, st)             # start() waits to see the renderer live
     o = config.opts(st.cfg)
     o["properties"] = st.cfg.get("properties", {}).get(wid, {})
     ok, msg = engine.start(wid, o)
@@ -579,6 +635,26 @@ def _keys_library(st, scr, k) -> bool:
             _apply(st, st.cfg["current"])
     elif k == ord("/"):
         st.typing = "filter"; st.buffer = st.filter
+    elif k == ord("c"):
+        st.kind = KINDS[(KINDS.index(st.kind) + 1) % len(KINDS)]
+        st.sel = st.top = 0
+        st.status = f"showing {KIND_LABEL[st.kind] or 'everything'}"
+    elif k == ord("S"):
+        st.sort = SORTS[(SORTS.index(st.sort) + 1) % len(SORTS)]
+        st.cfg["ui_sort"] = st.sort
+        config.save(st.cfg)
+        st.sel = st.top = 0
+        st.status = f"sorted {SORT_LABEL[st.sort] or 'a-z'}"
+    elif k == ord("z"):
+        import random
+        cur = st.cfg.get("current", "")
+        pool = [w for w in view if engine.backend_for(w)[1] and w.id != cur]
+        if pool:
+            pick = random.choice(pool)
+            st.sel = view.index(pick)
+            _apply(st, pick.id)
+        else:
+            st.status = "nothing else to shuffle to"
     elif k == ord("r"):
         st.lib = engine.scan_library()
         st._knobs.clear()
@@ -700,6 +776,7 @@ def run(scr):
     scr.timeout(2000)
     _init_colors()
     st = State()
+    st.scr = scr
     while True:
         _draw(scr, st)
         k = scr.getch()
@@ -733,6 +810,13 @@ def run(scr):
                    else _keys_browse(st, scr, k))
         if not handled and k in (ord("b"), ord("p")) and st.mode != "library":
             st.mode = "library"
+
+
+def _mtime(folder) -> float:
+    try:
+        return folder.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def main():

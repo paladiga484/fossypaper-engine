@@ -55,6 +55,7 @@ DEFAULTS = {
     "ui_card_width": 224,
     "ui_font": "",
     "ui_follow_wallpaper": False,   # recolour the GUI from the wallpaper palette
+    "ui_sort": "title",        # library order: title | new | kind (GUI and TUI share it)
 }
 
 _RENDER_KEYS = ("output", "span", "layer", "fps", "gpu", "scaling", "clamp", "assets_dir",
