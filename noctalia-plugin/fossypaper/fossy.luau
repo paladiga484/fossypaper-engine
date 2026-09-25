@@ -81,7 +81,7 @@ function M.apply(id: string, cb)
     if ok then
       M.release()
       if noctalia.getConfig("sync_theme") == true then
-        M.plain({ "theme" }, nil)
+        M.theme(nil)
       end
     end
     if cb then cb(ok, message) end
@@ -98,6 +98,38 @@ function M.release()
       noctalia.setWallpaperEnabled(name, false)
     end
   end
+end
+
+local FRAME = "~/.local/state/fossypaper/current-frame.png"
+
+-- `fossypaper theme` writes that still as the source it extracted fossypaper's
+-- own palette from. `setWallpaper` after `setWallpaperEnabled(..., false)`
+-- registers an image with Noctalia's own wallpaper record without Noctalia
+-- painting it anywhere — the output stays externally managed, so
+-- Wallpaper::syncInstances() skips it — but it does become what
+-- getPaletteWallpaperPath() returns, which is what Noctalia's own "Wallpaper"
+-- colour-scheme source reads from. Off by default: it only does anything once
+-- that source is actually selected (Settings -> Appearance -> Colour scheme,
+-- or `noctalia msg color-scheme-set wallpaper <scheme>`).
+function M.pushFrameToNoctalia()
+  if noctalia.getConfig("sync_noctalia_wallpaper") ~= true then
+    return
+  end
+  local frame = noctalia.expandPath(FRAME)
+  if noctalia.fileExists(frame) then
+    noctalia.setWallpaper(frame)
+  end
+end
+
+-- `fossypaper theme`: render a still, extract fossypaper's own palette, and
+-- optionally hand that same still to Noctalia's own palette source.
+function M.theme(cb)
+  M.plain({ "theme" }, function(ok, message)
+    if ok then
+      M.pushFrameToNoctalia()
+    end
+    if cb then cb(ok, message) end
+  end)
 end
 
 return M

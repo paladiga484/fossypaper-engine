@@ -42,6 +42,13 @@ description_key = "settings.release.description"
 default = true
 
 [[setting]]
+key = "sync_noctalia_wallpaper"
+type = "bool"
+label_key = "settings.sync_noctalia.label"
+description_key = "settings.sync_noctalia.description"
+default = false
+
+[[setting]]
 key = "show_thumbnails"
 type = "bool"
 label_key = "settings.thumbs.label"

@@ -113,7 +113,7 @@ Property = props_mod.Property          # re-exported: callers used engine.Proper
 class Wallpaper:
     id: str
     title: str
-    type: str                  # scene | video | image | web | application
+    type: str                  # scene | video | image | web | application | missing_assets | missing_dependency
     video: bool                # carries a video track the renderer must decode
     preview: Path | None
     folder: Path
@@ -121,6 +121,17 @@ class Wallpaper:
     audio: bool = False        # reacts to system audio
     tags: list = field(default_factory=list)
     description: str = ""
+    render_id: str = ""        # id to hand the renderer — itself, unless this is a
+                                # preset aliased onto a dependency it builds on
+    depends_on: str = ""       # workshop id a preset needs but doesn't have locally
+    preset_overrides: dict = field(default_factory=dict)  # this preset's own values,
+                                # to layer onto the dependency it renders through
+    skipped_textures: list = field(default_factory=list)  # scenetexture keys the
+                                # renderer can never fill from an external file
+
+    def __post_init__(self):
+        if not self.render_id:
+            self.render_id = self.id
 
     @property
     def supported(self) -> bool:
@@ -170,19 +181,98 @@ def _entry_file(folder: Path, meta: dict) -> Path | None:
     return None
 
 
-def read_wallpaper(folder: Path) -> Wallpaper | None:
-    pj = folder / "project.json"
-    if not pj.is_file():
-        return None
+def _read_project(folder: Path) -> dict | None:
     try:
-        meta = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
+        meta = json.loads((folder / "project.json").read_text(encoding="utf-8", errors="replace"))
     except (ValueError, OSError):
         return None
-    if not isinstance(meta, dict):
+    return meta if isinstance(meta, dict) else None
+
+
+def _dependency_folder(dep_id: str) -> Path | None:
+    for root in library_roots():
+        d = root / dep_id
+        if d.is_dir():
+            return d
+    return None
+
+
+def _preset_overrides(preset, folder: Path, base_prop_kinds: dict) -> tuple[dict, list]:
+    """A preset's own values, wire-formatted for `--set-property`, plus the
+    keys we deliberately left out.
+
+    These get applied on top of a *different* wallpaper's folder (the
+    dependency this preset builds on), so a value like `"files/glow.gif"` — a
+    path relative to *this* preset's own folder — has to become absolute
+    here, or the renderer would look for it in the wrong place.
+
+    `scenetexture` values are the one exception: linux-wallpaperengine's own
+    texture cache resolves them by asking the wallpaper's *compiled package*
+    for a texture of that name (`TextureCache::resolve`, which walks
+    `assetLocator->texture(...)` and nothing else) — it has no code path for
+    loading an arbitrary external image file, no matter how the path is
+    spelled. Forwarding one just buys a silent "Cannot resolve user texture"
+    and a blank panel, so skip it and say so instead of pretending it worked.
+    """
+    if not isinstance(preset, dict):
+        return {}, []
+    out, skipped = {}, []
+    for key, value in preset.items():
+        if (isinstance(value, str) and base_prop_kinds.get(key) == "scenetexture"
+                and (folder / value).is_file()):
+            skipped.append(key)
+            continue
+        if isinstance(value, bool):
+            out[key] = "true" if value else "false"
+        elif isinstance(value, str):
+            local = folder / value
+            out[key] = str(local) if local.is_file() else value
+        elif value is None:
+            continue
+        else:
+            out[key] = str(value)
+    return out, skipped
+
+
+def read_wallpaper(folder: Path) -> Wallpaper | None:
+    meta = _read_project(folder)
+    if meta is None:
         return None
     general = meta.get("general") if isinstance(meta.get("general"), dict) else {}
     entry = _entry_file(folder, meta)
-    kind = str(meta.get("type") or "").lower() or _infer_type(entry)
+
+    # A preset addon ships no scene of its own — just overrides — and names the
+    # base wallpaper it customizes via `dependency`. If that base is in the
+    # library too, render through it with the preset's own values layered on;
+    # if it isn't, this preset genuinely has nothing to draw.
+    render_id = folder.name
+    depends_on = ""
+    preset_overrides: dict = {}
+    skipped_textures: list = []
+    dependency = str(meta.get("dependency") or "").strip()
+    if entry is None and dependency:
+        base_folder = _dependency_folder(dependency)
+        base_meta = _read_project(base_folder) if base_folder else None
+        base_entry = (_entry_file(base_folder, base_meta)
+                      if base_folder and base_meta is not None else None)
+        if base_entry is not None:
+            entry, render_id = base_entry, base_folder.name
+            general = base_meta.get("general") if isinstance(base_meta.get("general"), dict) else {}
+            base_prop_kinds = {k: str((v or {}).get("type") or "").lower()
+                               for k, v in (general.get("properties") or {}).items()
+                               if isinstance(v, dict)}
+            preset_overrides, skipped_textures = _preset_overrides(
+                meta.get("preset"), folder, base_prop_kinds)
+        else:
+            depends_on = dependency
+
+    kind = ("missing_dependency" if depends_on else
+            str(meta.get("type") or "").lower() or _infer_type(entry))
+    if entry is None and kind in ("scene", "video", "image"):
+        # project.json declared a real type but nothing backs it — a partial
+        # Workshop download (manifest arrives, payload doesn't) looks exactly
+        # like this, and it must not fall through to "wpe has nothing to draw".
+        kind = "missing_assets"
     video = bool(general.get("supportsvideo")) or (
         entry is not None and entry.suffix.lower() in _VIDEO_EXT)
     return Wallpaper(
@@ -196,12 +286,16 @@ def read_wallpaper(folder: Path) -> Wallpaper | None:
         audio=bool(general.get("supportsaudioprocessing")),
         tags=[str(t) for t in (meta.get("tags") or []) if isinstance(t, (str, int))],
         description=str(meta.get("description") or ""),
+        render_id=render_id,
+        depends_on=depends_on,
+        preset_overrides=preset_overrides,
+        skipped_textures=skipped_textures,
     )
 
 
 def _infer_type(entry: Path | None) -> str:
     if entry is None:
-        return "unknown"
+        return "missing_assets"
     s = entry.suffix.lower()
     if s in _VIDEO_EXT:
         return "video"
@@ -236,12 +330,19 @@ def list_properties(wid: str) -> list[Property]:
     """The wallpaper's own knobs. project.json carries the full schema — types,
     ranges, combo options, and the `condition` expressions that say when a knob
     is even relevant — so read it there. Only fall back to asking the renderer
-    for a library that ships no schema."""
-    folder = WE_DIR / wid
+    for a library that ships no schema.
+
+    A preset aliased onto a dependency (see `read_wallpaper`) renders through
+    the *dependency's* files, so its knobs — not the preset's own, mostly-empty
+    project.json — are what's actually live.
+    """
+    wp = find(wid)
+    render_id = wp.render_id if wp else wid
+    folder = WE_DIR / render_id
     ps = props_mod.from_project(folder)
     if ps:
         return ps
-    return props_mod.from_renderer(BIN, wid) if have_renderer() else []
+    return props_mod.from_renderer(BIN, render_id) if have_renderer() else []
 
 
 # --------------------------------------------------------------------------- #
@@ -335,6 +436,10 @@ _UNSUPPORTED = {
     "web": "HTML wallpaper — no Linux renderer runs these, and fossypaper will not "
            "start a local web server to fake one",
     "application": "executable wallpaper — a Windows .exe, not something to run here",
+    "missing_assets": "no renderable file in this wallpaper's folder — looks like a "
+                       "partial or corrupted Workshop download; unsubscribe and "
+                       "resubscribe in Steam to force a fresh copy",
+    "missing_dependency": "a preset with no base wallpaper to render",
 }
 
 
@@ -378,7 +483,21 @@ def wants_audio(wp: Wallpaper, opts: dict) -> bool:
 
 
 def why_unsupported(wp: Wallpaper) -> str:
+    if wp.type == "missing_dependency" and wp.depends_on:
+        return (f"needs workshop item {wp.depends_on} as its base — subscribe to it "
+                f"in Steam Workshop, then rescan")
     return _UNSUPPORTED.get(wp.type, "")
+
+
+def render_note(wp: Wallpaper) -> str:
+    """A heads-up for a wallpaper that *does* render but not completely —
+    distinct from `why_unsupported`, which is for one that draws nothing."""
+    if wp.skipped_textures:
+        keys = ", ".join(wp.skipped_textures)
+        return (f"renders via its base wallpaper ({wp.render_id}); this preset's own "
+                f"custom image slot(s) — {keys} — stay blank, since "
+                f"linux-wallpaperengine can't load an external file as a scene texture")
+    return ""
 
 
 def backends_status() -> dict:
@@ -475,11 +594,15 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
         return False, f"no wallpaper with id {wid} in any library root"
     be, ok = backend_for(wp)
     if be in _UNSUPPORTED:
-        return False, _UNSUPPORTED[be]
+        return False, why_unsupported(wp) or _UNSUPPORTED[be]
     if not ok:
         return False, f"this one renders via {be}, which isn't installed — paru -S {be}"
     stop()
     opts = {**opts, "no_audio_processing": not wants_audio(wp, opts)}
+    if wp.preset_overrides:
+        # The preset's own values go first; anything the user set by hand for
+        # this wallpaper wins over them.
+        opts = {**opts, "properties": {**wp.preset_overrides, **(opts.get("properties") or {})}}
     try:
         {"mpvpaper": _start_mpvpaper, "swww": _start_swww, "wpe": _start_wpe}[be](wp, opts)
     except OSError as e:
@@ -495,7 +618,7 @@ def _spawn(argv, env=None):
 def _start_wpe(wp: Wallpaper, opts: dict):
     env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
     env.setdefault("WALLPAPER_ENGINE_ASSETS", str(opts.get("assets_dir") or ""))
-    _spawn(build_argv(wp.id, opts), env)
+    _spawn(build_argv(wp.render_id, opts), env)
 
 
 def _start_mpvpaper(wp: Wallpaper, opts: dict):
@@ -565,9 +688,10 @@ def screenshot(wid: str, out: Path, opts: dict) -> bool:
                 return True
     if have_renderer():
         env = dict(os.environ); env.update(gpu_env(opts.get("gpu", "auto")))
+        render_id = wp.render_id if wp is not None else wid
         try:
             subprocess.run([BIN, "--screenshot", str(out), "--screenshot-delay", "90",
-                            "--silent", wid], env=env, capture_output=True, timeout=60)
+                            "--silent", render_id], env=env, capture_output=True, timeout=60)
         except (OSError, subprocess.SubprocessError):
             pass
         if out.is_file():

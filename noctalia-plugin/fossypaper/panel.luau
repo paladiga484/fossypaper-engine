@@ -228,7 +228,7 @@ function onTheme()
   busy = true
   note = "reading the palette"
   render()
-  fossy.plain({ "theme" }, function(ok, message)
+  fossy.theme(function(ok, message)
     busy = false
     note = if ok then "palette written to ~/.local/state/fossypaper" else message
     render()

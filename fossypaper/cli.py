@@ -26,7 +26,8 @@ def _wp_dict(w, thumbs=False) -> dict:
          "usable": ok, "video": w.video, "audio": w.audio,
          "preview": str(w.preview) if w.preview else "",
          "folder": str(w.folder),
-         "reason": engine.why_unsupported(w)}
+         "reason": engine.why_unsupported(w),
+         "note": engine.render_note(w)}
     if thumbs:
         t = engine.thumbnail(w.id)
         d["thumb"] = str(t) if t else ""

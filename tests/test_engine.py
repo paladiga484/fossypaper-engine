@@ -51,7 +51,29 @@ class LibraryTest(unittest.TestCase):
             "1005": ({"title": "A web one", "type": "web", "file": "index.html"},
                      ["index.html"]),
             "1006": ({"title": "No entry file named", "type": "scene"}, ["scene.pkg"]),
+            "1007": ({"title": "Corrupted download", "preview": "preview.gif"},
+                     ["preview.gif"]),
+            "1007b": ({"title": "Manifest arrived, payload didn't", "type": "scene",
+                       "file": "scene.pkg", "preview": "preview.gif"},
+                      ["preview.gif"]),
+            "1008": ({"title": "Preset, base missing", "dependency": "9999",
+                      "preset": {"city1": "REDGRAVE"}, "preview": "preview.gif"},
+                     ["preview.gif"]),
+            "1009": ({"title": "Preset, base present", "dependency": "1001",
+                      "preset": {"custombgimage": "files/glow.gif", "rate": 100}},
+                     []),
+            "2001": ({"title": "Base with a photo slot", "type": "scene", "file": "scene.json",
+                      "general": {"properties": {
+                          "photoslot": {"type": "scenetexture", "value": ""}}}},
+                     ["scene.pkg"]),
+            "2002": ({"title": "Preset, unfillable photo slot", "dependency": "2001",
+                      "preset": {"photoslot": "files/pic.png", "tint": "1 0 0"}},
+                     []),
         })
+        (self.root / "1009" / "files").mkdir()
+        (self.root / "1009" / "files" / "glow.gif").write_bytes(b"\0" * 16)
+        (self.root / "2002" / "files").mkdir()
+        (self.root / "2002" / "files" / "pic.png").write_bytes(b"\0" * 16)
         (self.root / "not-a-wallpaper").mkdir()
         self._env = os.environ.get("FOSSYPAPER_LIBRARY")
         os.environ["FOSSYPAPER_LIBRARY"] = str(self.root)
@@ -65,7 +87,8 @@ class LibraryTest(unittest.TestCase):
 
     def test_scan_skips_folders_without_a_manifest(self):
         ids = {w.id for w in engine.scan_library()}
-        self.assertEqual(ids, {"1001", "1002", "1003", "1004", "1005", "1006"})
+        self.assertEqual(ids, {"1001", "1002", "1003", "1004", "1005", "1006",
+                                "1007", "1007b", "1008", "1009", "2001", "2002"})
 
     def test_entry_file_follows_the_manifest(self):
         """project.json names scene.json; the shipped bundle is the .pkg."""
@@ -93,6 +116,70 @@ class LibraryTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("web server", msg)
 
+    def test_corrupted_download_is_refused_not_silently_run(self):
+        """No entry file and no `dependency` to blame it on — a partial or
+        corrupted Workshop download. Must not fall through to 'wpe' just
+        because a renderer happens to be on PATH: there is nothing to draw."""
+        wp = engine.find("1007")
+        self.assertEqual(wp.type, "missing_assets")
+        self.assertFalse(wp.supported)
+        be, ok = engine.backend_for(wp)
+        self.assertEqual(be, "missing_assets")
+        self.assertFalse(ok)
+        self.assertIn("corrupted", engine.why_unsupported(wp))
+        ok, msg = engine.start("1007", config.opts(dict(config.DEFAULTS)))
+        self.assertFalse(ok)
+        self.assertIn("corrupted", msg)
+
+    def test_declared_type_does_not_override_a_missing_payload(self):
+        """project.json (small, arrives first from Steam) says 'scene' and
+        names scene.pkg, but scene.pkg (large, arrives later) never showed up.
+        The manifest's own say-so must not be trusted over what's on disk."""
+        wp = engine.find("1007b")
+        self.assertEqual(wp.type, "missing_assets")
+        self.assertFalse(engine.backend_for(wp)[1])
+
+    def test_preset_with_unresolvable_dependency_names_the_missing_item(self):
+        wp = engine.find("1008")
+        self.assertEqual(wp.type, "missing_dependency")
+        self.assertEqual(wp.depends_on, "9999")
+        self.assertFalse(engine.backend_for(wp)[1])
+        self.assertIn("9999", engine.why_unsupported(wp))
+
+    def test_preset_with_local_dependency_renders_through_the_base(self):
+        """A preset addon (no scene of its own, just a `dependency` id and
+        override values) should render via the base wallpaper it customizes,
+        with its own values layered on as --set-property."""
+        wp = engine.find("1009")
+        self.assertEqual(wp.type, "scene")               # inherited from 1001
+        self.assertTrue(wp.supported)
+        self.assertEqual(wp.render_id, "1001")
+        self.assertEqual(wp.preset_overrides["rate"], "100")
+        self.assertTrue(wp.preset_overrides["custombgimage"].endswith("1009/files/glow.gif"))
+        self.assertTrue(Path(wp.preset_overrides["custombgimage"]).is_absolute())
+        self.assertEqual(engine.backend_for(wp)[0], "wpe")
+
+        argv = engine.build_argv(wp.render_id,
+                                  {**config.opts(dict(config.DEFAULTS)),
+                                   "properties": wp.preset_overrides})
+        self.assertEqual(argv[argv.index("--bg") + 1], "1001")
+        self.assertIn(f"custombgimage={wp.preset_overrides['custombgimage']}", argv)
+
+    def test_scenetexture_overrides_are_not_forwarded(self):
+        """linux-wallpaperengine's texture cache only ever resolves a scene
+        texture against the wallpaper's own compiled package — it has no code
+        path for loading an external file, whatever path we hand it. Forwarding
+        one just buys a silent renderer-side failure and a blank panel, so this
+        must be skipped and surfaced, not sent."""
+        wp = engine.find("2002")
+        self.assertEqual(wp.type, "scene")
+        self.assertEqual(wp.skipped_textures, ["photoslot"])
+        self.assertNotIn("photoslot", wp.preset_overrides)
+        self.assertEqual(wp.preset_overrides["tint"], "1 0 0")   # untouched, not scenetexture
+        note = engine.render_note(wp)
+        self.assertIn("photoslot", note)
+        self.assertIn("2001", note)
+
     def test_audio_processing_auto_follows_the_manifest(self):
         o = config.opts(dict(config.DEFAULTS))
         self.assertEqual(o["audio_processing"], "auto")
@@ -105,6 +192,19 @@ class LibraryTest(unittest.TestCase):
         ok, msg = engine.start("nope", config.opts(dict(config.DEFAULTS)))
         self.assertFalse(ok)
         self.assertIn("nope", msg)
+
+    def test_start_resolves_a_preset_through_its_dependency(self):
+        """End-to-end through start(): the wallpaper actually launched has to
+        be the dependency's, carrying the preset's own overrides — not the
+        preset's own (assetless) id."""
+        from unittest.mock import patch
+        with patch.object(engine, "have_renderer", return_value=True), \
+             patch.object(engine, "_spawn") as spawn:
+            ok, msg = engine.start("1009", config.opts(dict(config.DEFAULTS)))
+        self.assertTrue(ok, msg)
+        argv = spawn.call_args[0][0]
+        self.assertEqual(argv[argv.index("--bg") + 1], "1001")
+        self.assertTrue(any(a.startswith("custombgimage=") for a in argv))
 
 
 class ArgvTest(unittest.TestCase):

@@ -283,7 +283,8 @@ def _draw_library(scr, st, top_y, H, W):
     be, ok = engine.backend_for(w)
     reason = engine.why_unsupported(w)
     renders = {"mpvpaper": "video -> mpvpaper", "swww": "image -> swww",
-               "wpe": "scene -> linux-wallpaperengine"}.get(be, be)
+               "wpe": "scene -> linux-wallpaperengine",
+               "missing_assets": "broken download", "missing_dependency": "needs base wallpaper"}.get(be, be)
     if not ok:
         renders += "  (unavailable)"
     y = top_y + 1
@@ -298,6 +299,10 @@ def _draw_library(scr, st, top_y, H, W):
     if reason:
         for ln in textwrap.wrap(reason, rw - 5)[:3]:
             _put(scr, y, rx + 2, ln, A(WARN)); y += 1
+    note = engine.render_note(w)
+    if note:
+        for ln in textwrap.wrap(note, rw - 5)[:3]:
+            _put(scr, y, rx + 2, ln, A(ACCENT)); y += 1
 
     y += 1
     _put(scr, y, rx + 2, "SETTINGS", A(ACCENT)); y += 1

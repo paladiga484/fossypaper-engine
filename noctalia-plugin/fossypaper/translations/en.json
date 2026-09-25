@@ -5,6 +5,8 @@
   "settings.sync_theme.description": "After applying a wallpaper, read a palette out of its pixels.",
   "settings.release.label": "Release Noctalia's wallpaper",
   "settings.release.description": "Turn off Noctalia's own wallpaper surface while fossypaper is driving, so the two do not stack.",
+  "settings.sync_noctalia.label": "Feed Noctalia's own colour scheme",
+  "settings.sync_noctalia.description": "After reading a palette, also hand the rendered still to Noctalia's own wallpaper record (never displayed, image only) so its built-in \"Wallpaper\" colour-scheme source can use it too. Pick that source under Settings → Appearance → Colour scheme for this to do anything.",
   "settings.thumbs.label": "Show thumbnails",
   "settings.thumbs.description": "Bake a still of each preview and show it in the panel. Costs a little disk.",
   "settings.show_title.label": "Show the title",

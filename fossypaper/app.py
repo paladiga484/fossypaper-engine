@@ -157,10 +157,11 @@ class Card(QFrame):
         title.setObjectName("cardTitle")
         title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         be, ok = engine.backend_for(wp)
-        label = {"wpe": "scene", "mpvpaper": "video", "swww": "image"}.get(be, be)
+        label = {"wpe": "scene", "mpvpaper": "video", "swww": "image",
+                 "missing_assets": "broken", "missing_dependency": "needs base"}.get(be, be)
         badge = QLabel(label if ok else label + " !")
         badge.setObjectName("badgeOk" if ok else "badgeWarn")
-        badge.setToolTip(engine.why_unsupported(wp) or
+        badge.setToolTip(engine.why_unsupported(wp) or engine.render_note(wp) or
                          {"wpe": "Wallpaper Engine scene, via linux-wallpaperengine",
                           "mpvpaper": "video, via mpvpaper",
                           "swww": "still image, via swww"}.get(be, be)
@@ -921,13 +922,24 @@ class MainWindow(QMainWindow):
     def _theme(self):
         if not self.selected:
             return
+        wid = self.selected
+        opts = config.opts(self.cfg)
+        backend = self.cfg.get("theme_backend", "builtin")
         self._status("rendering a frame and reading its colours…")
-        QApplication.processEvents()
-        ok, msg = engine.sync_theme(self.selected, config.opts(self.cfg),
-                                    self.cfg.get("theme_backend", "builtin"))
+        # linux-wallpaperengine's --screenshot mode can take up to a minute
+        # (and on some compositors just hangs for it) — run it off the GUI
+        # thread so a slow renderer freezes a status line, not the window.
+        self.jobs.start(lambda: engine.sync_theme(wid, opts, backend),
+                        self._theme_done, self._theme_failed, tag=wid)
+
+    def _theme_done(self, tag, result):
+        ok, msg = result
         if ok and self.cfg.get("ui_follow_wallpaper"):
             self._restyle()
         self._status(msg)
+
+    def _theme_failed(self, tag, message):
+        self._status(f"theme sync failed: {message}")
 
     def _apply_props(self, wid, props):
         store = self.cfg.setdefault("properties", {})
