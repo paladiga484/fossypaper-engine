@@ -84,6 +84,7 @@ works without either, and hands items to Steam to fetch.
 | `~/.local/state/fossypaper/` | the extracted palette (`colors.json/.sh/.css`), the frame it came from, any SDDM still, and `renderer.log` — the renderer's own output from the last apply, overwritten each time | delete the directory |
 | `~/.cache/fossypaper/thumbs/` | browser thumbnails, keyed by a hash of their URL | `fossypaper config --reset` does not touch it; delete the directory |
 | `~/.cache/fossypaper/library/` | stills baked from your own local previews | delete the directory |
+| `~/.cache/fossypaper/ui/` | two tiny arrow SVGs per theme colour (Qt stylesheets cannot draw their own) | delete the directory |
 | `~/.local/share/fossypaper/wallpapers/` | wallpapers you downloaded from Wallhaven | delete what you don't want |
 | `~/.config/systemd/user/fossypaper.service` | only if you enable login autostart | `fossypaper autostart off` |
 

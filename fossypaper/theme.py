@@ -16,6 +16,11 @@ THEMES = {
     "ashen":    ("#161616", "#1f1f1f", "#333333", "#dcdcdc", "#8a8a8a", "#9a8c98"),
     "ember":    ("#120e0c", "#1b1614", "#33291f", "#ece2d8", "#94867a", "#c05621"),
     "bone":     ("#f4f2ed", "#ffffff", "#d8d4cb", "#1c1b19", "#6b675f", "#7a5c2e"),
+    # the darker shelf
+    "carcosa":  ("#0b0a07", "#13110c", "#2a261b", "#e8e0c8", "#8f8670", "#d9b72b"),
+    "abyssal":  ("#050a0c", "#0a1316", "#1a2a2f", "#d6e4e6", "#6f8a8f", "#3fbfa8"),
+    "bloodmoon": ("#0a0607", "#130c0d", "#2c1a1c", "#eadcdc", "#917a7b", "#c3263a"),
+    "eldritch": ("#08070c", "#100e17", "#241f33", "#e0dcf0", "#827c99", "#9bd34f"),
 }
 DEFAULT = "obsidian"
 ROLES = ("bg", "surface", "line", "text", "dim", "accent")
@@ -81,10 +86,42 @@ def _from_wallpaper(pal: list) -> dict:
             "accent": accent}
 
 
-def stylesheet(p: dict, font: str = "", card_w: int = 224) -> str:
+_ARROW = ('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6">'
+          '<path d="{d}" fill="{c}"/></svg>')
+
+
+def arrow_icons(p: dict, where) -> dict:
+    """Qt stylesheets can't draw a CSS border-triangle (it comes out as a bar),
+    so the combo and spin arrows are two tiny SVGs in the theme's dim colour,
+    written once per colour under `where`."""
+    from pathlib import Path
+    where = Path(where)
+    where.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for name, d in (("down", "M0 0h10L5 6z"), ("up", "M0 6h10L5 0z")):
+        f = where / f"arrow-{name}-{p['dim'].lstrip('#')}.svg"
+        if not f.is_file():
+            f.write_text(_ARROW.format(d=d, c=p["dim"]))
+        out[name] = f.as_posix()
+    return out
+
+
+def stylesheet(p: dict, font: str = "", card_w: int = 224, arrows: dict | None = None) -> str:
     """Qt stylesheet. Flat fills, hairline borders, no gradients."""
     family = f"font-family:'{font}';" if font else ""
     sel = mix(p["surface"], p["accent"], 0.28)
+    return _base(p, family, sel) + (_arrow_rules(arrows) if arrows else "")
+
+
+def _arrow_rules(a: dict) -> str:
+    return f"""
+QComboBox::down-arrow {{ image:url({a['down']}); width:10px; height:6px; border:0; margin-right:6px; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image:url({a['up']}); width:8px; height:5px; border:0; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image:url({a['down']}); width:8px; height:5px; border:0; }}
+"""
+
+
+def _base(p: dict, family: str, sel: str) -> str:
     return f"""
 * {{ outline: none; }}
 QWidget {{ background:{p['bg']}; color:{p['text']}; {family} font-size:13px; }}
@@ -169,5 +206,50 @@ QStatusBar::item {{ border:0; }}
 QToolTip {{ background:{p['surface']}; color:{p['text']};
             border:1px solid {p['line']}; padding:4px; }}
 QGroupBox {{ border:1px solid {p['line']}; margin-top:14px; padding-top:8px; }}
+
+/* ── now playing ───────────────────────────────────────────────────── */
+QFrame#hero {{ background:{p['surface']}; border:0; border-bottom:1px solid {p['line']}; }}
+QFrame#hero QLabel, QWidget#dockHead QLabel, QWidget#cardFoot QLabel {{ background:transparent; }}
+QLabel#heroArt {{ background:{p['bg']}; border:1px solid {p['line']}; color:{p['dim']}; }}
+QLabel#heroState {{ color:{p['dim']}; font-size:10px; letter-spacing:3px; font-weight:600; }}
+QLabel#heroState[live="true"] {{ color:{p['accent']}; }}
+QLabel#heroTitle {{ color:{p['text']}; font-size:21px; }}
+
+/* ── navigation ────────────────────────────────────────────────────── */
+QWidget#navbar {{ background:{p['bg']}; border-bottom:1px solid {p['line']}; }}
+QPushButton#navtab {{ background:transparent; border:0; border-bottom:2px solid transparent;
+            color:{p['dim']}; padding:6px 12px; font-size:13px; letter-spacing:1px; }}
+QPushButton#navtab:hover {{ color:{p['text']}; }}
+QPushButton#navtab:checked {{ color:{p['text']}; border-bottom:2px solid {p['accent']}; }}
+QPushButton#chip {{ background:transparent; color:{p['dim']}; border:1px solid {p['line']};
+            border-radius:11px; padding:3px 11px; font-size:12px; }}
+QPushButton#chip:hover {{ color:{p['text']}; border-color:{p['dim']}; }}
+QPushButton#chip:checked {{ background:{p['accent']}; color:{p['bg']}; border-color:{p['accent']}; }}
+QPushButton#flat {{ background:transparent; border:1px solid transparent; color:{p['dim']};
+            padding:5px 9px; }}
+QPushButton#flat:hover {{ color:{p['text']}; border:1px solid {p['line']}; }}
+QLabel#empty {{ color:{p['dim']}; font-size:15px; }}
+
+/* ── cards ─────────────────────────────────────────────────────────── */
+QFrame#card {{ padding:0; }}
+QFrame#card[selected="true"] {{ border:1px solid {p['text']}; }}
+QFrame#card[current="true"] {{ border:1px solid {p['accent']}; }}
+QFrame#nowbar {{ background:{p['surface']}; border:0; }}
+QFrame#nowbar[current="true"] {{ background:{p['accent']}; }}
+QWidget#cardFoot {{ background:{p['surface']}; }}
+QLabel#badgeOk, QLabel#badgeWarn {{ font-size:10px; letter-spacing:1px; font-weight:600; }}
+QFrame#card[current="true"] QLabel#badgeOk {{ color:{p['accent']}; }}
+
+/* ── dock ──────────────────────────────────────────────────────────── */
+QWidget#dockHead {{ background:{p['surface']}; border-bottom:1px solid {p['line']}; }}
+QLabel#dockTitle {{ color:{p['text']}; font-size:16px; }}
+QLabel#caption {{ color:{p['dim']}; font-size:10px; letter-spacing:3px; font-weight:600;
+            padding:12px 14px 4px 14px; }}
+
+QMenu {{ background:{p['surface']}; color:{p['text']}; border:1px solid {p['line']}; padding:4px; }}
+QMenu::item {{ padding:5px 18px; background:transparent; }}
+QMenu::item:selected {{ background:{sel}; }}
+QMenu::item:disabled {{ color:{p['dim']}; }}
+QMenu::separator {{ height:1px; background:{p['line']}; margin:4px 6px; }}
 QGroupBox::title {{ color:{p['accent']}; subcontrol-origin:margin; left:8px; padding:0 4px; }}
 """

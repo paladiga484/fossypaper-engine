@@ -340,7 +340,7 @@ def list_properties(wid: str) -> list[Property]:
     render_id = wp.render_id if wp else wid
     folder = WE_DIR / render_id
     ps = props_mod.from_project(folder)
-    if ps:
+    if ps or props_mod.has_schema(folder):
         return ps
     return props_mod.from_renderer(BIN, render_id) if have_renderer() else []
 

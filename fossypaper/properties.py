@@ -186,7 +186,20 @@ def from_renderer(binary: str, wid: str, timeout: int = 25) -> list[Property]:
         elif s.startswith("Step:"):    cur.step = _num(s[5:], 0.01) or 0.01
         elif s.startswith("Options:"): cur.options = [(o.strip(), o.strip())
                                                       for o in s[8:].split(",") if o.strip()]
-    return props
+    for pr in props:
+        pr.text = label(pr.text, pr.key)
+    return [pr for pr in props if pr.key not in HIDDEN]
+
+
+def has_schema(folder: Path) -> bool:
+    """Does project.json declare its knobs at all? A schema with nothing we
+    offer (only the scheme colour, say) is still an answer — don't go asking
+    the renderer, which takes seconds and returns the same scheme colour."""
+    try:
+        meta = json.loads((folder / "project.json").read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return False
+    return isinstance((meta.get("general") or {}).get("properties"), dict)
 
 
 # --------------------------------------------------------------------------- #

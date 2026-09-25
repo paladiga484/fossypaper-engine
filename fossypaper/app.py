@@ -10,15 +10,16 @@ Flat surfaces throughout. See theme.py for why.
 """
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QObject, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QMovie, QPixmap
+from PySide6.QtCore import Qt, QObject, QSize, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QMovie, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
+    QApplication, QButtonGroup, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStackedWidget,
     QStatusBar, QTabWidget, QToolBar, QVBoxLayout, QWidget,
 )
@@ -128,48 +129,96 @@ class Jobs:
 # --------------------------------------------------------------------------- #
 #  Cards
 # --------------------------------------------------------------------------- #
+class ElidedLabel(QLabel):
+    """A one-line label that ends in … instead of being cut mid-glyph. The full
+    text rides in the tooltip."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full = str(text or "")
+        self.setToolTip(self._full)
+        self._elide()
+
+    def full(self):
+        return self._full
+
+    def _elide(self):
+        w = max(0, self.width() - 2)
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.ElideRight, w)
+                        if w else self._full)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._elide()
+
+
+_KIND = {"wpe": "scene", "mpvpaper": "video", "swww": "still",
+         "missing_assets": "broken", "missing_dependency": "needs base"}
+
+
+def kind_of(wp) -> str:
+    be, _ok = engine.backend_for(wp)
+    if be == "mpvpaper" and wp.type == "image":
+        return "still"
+    return _KIND.get(be, be)
+
+
 class Card(QFrame):
     """One wallpaper. Animated previews play on hover only — the library is
     forty of these and forty looping GIFs is not a free thing to ask for."""
     picked = Signal(object)
     opened = Signal(object)
+    menu = Signal(object, object)          # wp, global position
 
     def __init__(self, wp, width=224):
         super().__init__()
         self.wp = wp
         self._movie = None
         self.setObjectName("card")
-        h = int(width * 0.75)
-        self.setFixedSize(width, h)
+        thumb_h = int(width * 9 / 16)
+        self.setFixedSize(width, thumb_h + 44)
         self.setProperty("selected", False)
         self.setProperty("current", False)
+        self.setCursor(Qt.PointingHandCursor)
         v = QVBoxLayout(self)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.setSpacing(4)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        self.nowbar = QFrame()
+        self.nowbar.setObjectName("nowbar")
+        self.nowbar.setFixedHeight(3)
+        v.addWidget(self.nowbar)
         self.thumb = QLabel()
         self.thumb.setObjectName("thumb")
-        self.thumb.setFixedHeight(h - 46)
+        self.thumb.setFixedHeight(thumb_h - 3)
         self.thumb.setAlignment(Qt.AlignCenter)
         v.addWidget(self.thumb)
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        title = QLabel(wp.title)
+        foot = QWidget()
+        foot.setObjectName("cardFoot")
+        row = QHBoxLayout(foot)
+        row.setContentsMargins(10, 0, 10, 0)
+        row.setSpacing(8)
+        title = ElidedLabel(wp.title)
         title.setObjectName("cardTitle")
-        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         be, ok = engine.backend_for(wp)
-        label = {"wpe": "scene", "mpvpaper": "video", "swww": "image",
-                 "missing_assets": "broken", "missing_dependency": "needs base"}.get(be, be)
-        badge = QLabel(label if ok else label + " !")
-        badge.setObjectName("badgeOk" if ok else "badgeWarn")
-        badge.setToolTip(engine.why_unsupported(wp) or engine.render_note(wp) or
-                         {"wpe": "Wallpaper Engine scene, via linux-wallpaperengine",
-                          "mpvpaper": "video, via mpvpaper",
-                          "swww": "still image, via swww"}.get(be, be)
-                         + ("" if ok else " — not installed"))
+        self.badge = QLabel()
+        self.badge.setObjectName("badgeOk" if ok else "badgeWarn")
+        self._kind = kind_of(wp) + ("" if ok else " !")
+        self.badge.setText(self._kind.upper())
+        title.setToolTip(wp.title + "\n" + (
+            engine.why_unsupported(wp) or engine.render_note(wp) or
+            {"wpe": "Wallpaper Engine scene, via linux-wallpaperengine",
+             "mpvpaper": "video, via mpvpaper",
+             "swww": "still image, via swww"}.get(be, be)
+            + ("" if ok else " — not installed")))
         row.addWidget(title, 1)
-        row.addWidget(badge)
-        v.addLayout(row)
-        self._load_preview(width - 12, h - 46)
+        row.addWidget(self.badge)
+        v.addWidget(foot, 1)
+        self._load_preview(width, thumb_h - 3)
 
     def _load_preview(self, w, h):
         p = self.wp.preview
@@ -200,18 +249,27 @@ class Card(QFrame):
             self.thumb.setPixmap(self._movie.currentPixmap())
 
     def mousePressEvent(self, e):
-        self.picked.emit(self.wp)
+        if e.button() == Qt.LeftButton:
+            self.picked.emit(self.wp)
 
     def mouseDoubleClickEvent(self, e):
-        self.opened.emit(self.wp)
+        if e.button() == Qt.LeftButton:
+            self.opened.emit(self.wp)
+
+    def contextMenuEvent(self, e):
+        self.picked.emit(self.wp)
+        self.menu.emit(self.wp, e.globalPos())
 
     def mark(self, selected=None, current=None):
         if selected is not None:
             self.setProperty("selected", selected)
         if current is not None:
             self.setProperty("current", current)
-        self.style().unpolish(self)
-        self.style().polish(self)
+            self.badge.setText("▶ NOW" if current else self._kind.upper())
+        for w in (self, self.nowbar):
+            w.setProperty("current", self.property("current"))
+            w.style().unpolish(w)
+            w.style().polish(w)
 
 
 class ResultCard(QFrame):
@@ -233,18 +291,16 @@ class ResultCard(QFrame):
         self.thumb.setAlignment(Qt.AlignCenter)
         v.addWidget(self.thumb)
         line = QHBoxLayout()
-        t = QLabel(row.title)
+        t = ElidedLabel(row.title)
         t.setObjectName("cardTitle")
-        t.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         t.setToolTip(f"{row.title}\n{row.meta}\n{row.page_url}")
         state = QLabel("in library" if row.installed() else row.kind)
         state.setObjectName("badgeOk" if row.installed() else "badgeWarn")
         line.addWidget(t, 1)
         line.addWidget(state)
         v.addLayout(line)
-        meta = QLabel(row.meta)
+        meta = ElidedLabel(row.meta)
         meta.setObjectName("muted")
-        meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         v.addWidget(meta)
 
     def set_thumb(self, path):
@@ -320,14 +376,42 @@ class PropertyDock(QDockWidget):
     are hidden, exactly as Wallpaper Engine hides them — showing all 77 at once
     is not an editor, it's a wall."""
 
+    set_wallpaper = Signal()
+
     def __init__(self, apply_cb, parent=None):
-        super().__init__("PROPERTIES", parent)
+        super().__init__("SELECTED", parent)
         self.apply_cb = apply_cb
         self.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         self.setMinimumWidth(300)
+        host = QWidget()
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        head = QWidget()
+        head.setObjectName("dockHead")
+        hv = QVBoxLayout(head)
+        hv.setContentsMargins(14, 14, 14, 14)
+        hv.setSpacing(6)
+        self.head_title = ElidedLabel("nothing selected")
+        self.head_title.setObjectName("dockTitle")
+        self.head_meta = ElidedLabel("")
+        self.head_meta.setObjectName("muted")
+        self.head_go = QPushButton("Set as wallpaper")
+        self.head_go.setObjectName("primary")
+        self.head_go.setEnabled(False)
+        self.head_go.clicked.connect(self.set_wallpaper)
+        hv.addWidget(self.head_title)
+        hv.addWidget(self.head_meta)
+        hv.addSpacing(4)
+        hv.addWidget(self.head_go)
+        outer.addWidget(head)
+        cap = QLabel("PROPERTIES")
+        cap.setObjectName("caption")
+        outer.addWidget(cap)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.setWidget(self.scroll)
+        outer.addWidget(self.scroll, 1)
+        self.setWidget(host)
         self.body = QWidget()
         self.form = QVBoxLayout(self.body)
         self.form.setContentsMargins(10, 10, 10, 10)
@@ -337,6 +421,16 @@ class PropertyDock(QDockWidget):
         self.values: dict = {}
         self.rows: dict = {}
         self.wid = ""
+
+    def describe(self, wp, is_current: bool):
+        self.head_title.setText(wp.title if wp else "nothing selected")
+        if wp:
+            bits = [kind_of(wp), wp.id]
+            if wp.audio:
+                bits.append("reacts to sound")
+            self.head_meta.setText(" · ".join(bits))
+        self.head_go.setEnabled(bool(wp) and engine.backend_for(wp)[1])
+        self.head_go.setText("Reapply" if is_current else "Set as wallpaper")
 
     def load(self, wid, saved: dict):
         self.wid = wid
@@ -349,7 +443,7 @@ class PropertyDock(QDockWidget):
         self.rows = {}
         editable = [p for p in self.props if p.editable]
         if not editable:
-            self.form.addWidget(_muted("this wallpaper exposes no adjustable knobs"))
+            self.form.addWidget(_muted("This one has no knobs to turn. It is what it is."))
             self.form.addStretch(1)
             return
         for p in self.props:
@@ -363,6 +457,11 @@ class PropertyDock(QDockWidget):
                 continue
             widget = self._widget(p)
             if widget is None:
+                continue
+            if p.kind == "bool":
+                widget.setText(p.text)
+                self.form.addWidget(widget)
+                self.rows[p.key] = (p, widget, widget)
                 continue
             row = QWidget()
             lay = QVBoxLayout(row)
@@ -380,7 +479,7 @@ class PropertyDock(QDockWidget):
         h.setContentsMargins(0, 6, 0, 0)
         reset = QPushButton("Reset")
         reset.clicked.connect(self._reset)
-        apply = QPushButton("Apply")
+        apply = QPushButton("Apply changes")
         apply.setObjectName("primary")
         apply.clicked.connect(self._apply)
         h.addWidget(reset)
@@ -790,84 +889,270 @@ class DocDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
+#  Now playing — the one loud thing in the window
+# --------------------------------------------------------------------------- #
+class NowPlaying(QFrame):
+    """What is on your desktop right now, and the three things you do to it."""
+    toggle = Signal()
+    shuffle = Signal()
+    theme = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("hero")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(16, 14, 16, 14)
+        h.setSpacing(16)
+        self.art = QLabel()
+        self.art.setObjectName("heroArt")
+        self.art.setFixedSize(176, 99)
+        self.art.setAlignment(Qt.AlignCenter)
+        h.addWidget(self.art)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.state = QLabel()
+        self.state.setObjectName("heroState")
+        self.title = ElidedLabel("")
+        self.title.setObjectName("heroTitle")
+        self.meta = ElidedLabel("")
+        self.meta.setObjectName("muted")
+        text.addStretch(1)
+        text.addWidget(self.state)
+        text.addWidget(self.title)
+        text.addWidget(self.meta)
+        text.addStretch(1)
+        h.addLayout(text, 1)
+        self.play = QPushButton()
+        self.play.setObjectName("primary")
+        self.play.setMinimumWidth(104)
+        self.play.clicked.connect(self.toggle)
+        shuf = QPushButton("Shuffle")
+        shuf.setToolTip("a random wallpaper from the library")
+        shuf.clicked.connect(self.shuffle)
+        pal = QPushButton("Palette")
+        pal.setToolTip("read a colour palette out of the wallpaper's pixels")
+        pal.clicked.connect(self.theme)
+        for b in (self.play, shuf, pal):
+            b.setMinimumHeight(34)
+            h.addWidget(b)
+
+    def show_state(self, wp, running: bool, busy: str = ""):
+        state = busy or ("NOW PLAYING" if running else "STOPPED")
+        self.state.setText(state)
+        self.state.setProperty("live", running and not busy)
+        self.state.style().unpolish(self.state)
+        self.state.style().polish(self.state)
+        self.play.setText("■  Stop" if running else "▶  Play")
+        self.play.setEnabled(not busy and (running or wp is not None))
+        if wp is None:
+            self.title.setText("No wallpaper yet")
+            self.meta.setText("pick one below and press Enter")
+            self.art.clear()
+            self.art.setText("—")
+            return
+        self.title.setText(wp.title)
+        bits = [kind_of(wp)]
+        if wp.audio:
+            bits.append("reacts to sound")
+        if wp.tags:
+            bits.append(", ".join(str(t) for t in wp.tags[:3]))
+        self.meta.setText("  ·  ".join(bits))
+        pm = QPixmap(str(wp.preview)) if wp.preview and wp.preview.is_file() else QPixmap()
+        if pm.isNull():
+            self.art.setText("no preview")
+        else:
+            self.art.setPixmap(pm.scaled(self.art.size(), Qt.KeepAspectRatioByExpanding,
+                                         Qt.SmoothTransformation))
+
+
+# --------------------------------------------------------------------------- #
 #  Main window
 # --------------------------------------------------------------------------- #
+FILTERS = (("All", None), ("Scenes", "scene"), ("Video", "video"),
+           ("Stills", "still"), ("Reactive", "audio"))
+SORTS = (("A – Z", "title"), ("Newest", "new"), ("Kind", "kind"))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("fossypaper")
-        self.resize(1120, 760)
+        self.resize(1240, 820)
         self.cfg = config.load()
         self.jobs = Jobs()
         self.lib = engine.scan_library()
         self.cards = {}
         self.selected = self.cfg.get("current", "")
+        self.running = engine.is_running()
+        self.busy = ""
 
-        tb = QToolBar()
-        tb.setMovable(False)
-        self.addToolBar(tb)
-        for name, fn, tip in (
-            ("Apply", self._apply, "apply the selected wallpaper"),
-            ("Off", self._off, "stop the wallpaper"),
-            ("Theme", self._theme, "read a palette out of the wallpaper's pixels"),
-            ("Browse", self._toggle_browse, "Wallhaven and the Steam Workshop"),
-            ("Refresh", self._refresh, "rescan the library"),
-            ("Settings", self._settings, ""),
-            ("Privacy", self._docs, "what leaves this machine, and where it goes"),
-        ):
-            act = QAction(name, self)
-            act.setToolTip(tip)
-            act.triggered.connect(fn)
-            tb.addAction(act)
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        tb.addWidget(spacer)
+        central = QWidget()
+        col = QVBoxLayout(central)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+
+        self.hero = NowPlaying()
+        self.hero.toggle.connect(self._toggle)
+        self.hero.shuffle.connect(self._shuffle)
+        self.hero.theme.connect(self._theme)
+        col.addWidget(self.hero)
+
+        nav = QWidget()
+        nav.setObjectName("navbar")
+        nh = QHBoxLayout(nav)
+        nh.setContentsMargins(12, 8, 12, 8)
+        nh.setSpacing(6)
+        self.tab_lib = QPushButton("Library")
+        self.tab_web = QPushButton("Browse")
+        for b in (self.tab_lib, self.tab_web):
+            b.setObjectName("navtab")
+            b.setCheckable(True)
+            nh.addWidget(b)
+        self.tab_lib.setChecked(True)
+        self.tab_lib.clicked.connect(lambda: self._show(self.grid))
+        self.tab_web.clicked.connect(lambda: self._show(self.browser))
+        nh.addSpacing(18)
+        self.chips = QButtonGroup(self)
+        self.chips.setExclusive(True)
+        self.chip_row = QWidget()
+        ch = QHBoxLayout(self.chip_row)
+        ch.setContentsMargins(0, 0, 0, 0)
+        ch.setSpacing(4)
+        for i, (label, key) in enumerate(FILTERS):
+            b = QPushButton(label)
+            b.setObjectName("chip")
+            b.setCheckable(True)
+            b.setProperty("key", key)
+            self.chips.addButton(b, i)
+            ch.addWidget(b)
+        self.chips.button(0).setChecked(True)
+        self.chips.idClicked.connect(lambda _i: self._build_grid())
+        nh.addWidget(self.chip_row)
+        nh.addStretch(1)
+        self.sort = QComboBox()
+        for label, key in SORTS:
+            self.sort.addItem(label, key)
+        i = self.sort.findData(self.cfg.get("ui_sort", "title"))
+        self.sort.setCurrentIndex(max(0, i))
+        self.sort.currentIndexChanged.connect(self._sort_changed)
+        nh.addWidget(self.sort)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("filter the library")
-        self.search.setMaximumWidth(240)
+        self.search.setPlaceholderText("filter   ( / )")
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(220)
         self.search.textChanged.connect(self._build_grid)
-        tb.addWidget(self.search)
-        self.hidevid = QCheckBox("hide video")
-        self.hidevid.stateChanged.connect(self._build_grid)
-        tb.addWidget(self.hidevid)
+        nh.addWidget(self.search)
+        for name, fn in (("Refresh", self._refresh), ("Settings", self._settings),
+                         ("Privacy", self._docs)):
+            b = QPushButton(name)
+            b.setObjectName("flat")
+            b.clicked.connect(fn)
+            nh.addWidget(b)
+        col.addWidget(nav)
 
         self.stack = QStackedWidget()
         self.grid = CardGrid(int(self.cfg.get("ui_card_width", 224)))
         self.browser = Browser(self.jobs, self.cfg, int(self.cfg.get("ui_card_width", 224)))
         self.browser.status.connect(self._status)
         self.browser.imported.connect(self._refresh)
+        self.empty = QLabel("Nothing here matches.\nThe library is larger than your filter.")
+        self.empty.setObjectName("empty")
+        self.empty.setAlignment(Qt.AlignCenter)
         self.stack.addWidget(self.grid)
         self.stack.addWidget(self.browser)
-        self.setCentralWidget(self.stack)
+        self.stack.addWidget(self.empty)
+        col.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
 
         self.dock = PropertyDock(self._apply_props, self)
+        self.dock.set_wallpaper.connect(self._apply)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
-        self.resizeDocks([self.dock], [330], Qt.Horizontal)
+        self.resizeDocks([self.dock], [340], Qt.Horizontal)
         self.setStatusBar(QStatusBar())
+        self.counts = QLabel()
+        self.counts.setObjectName("muted")
+        self.statusBar().addPermanentWidget(self.counts)
+
+        # Enter applies only from the grid — anywhere else it belongs to the
+        # field you're typing in.
+        for keys in ("Return", "Enter"):
+            act = QAction(self.grid)
+            act.setShortcut(keys)
+            act.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            act.triggered.connect(self._apply)
+            self.grid.addAction(act)
+        for keys, fn in (("Ctrl+F", self._focus_search), ("/", self._focus_search),
+                         ("Escape", self._escape), ("Ctrl+B", self._toggle_browse),
+                         ("F5", self._refresh), ("Ctrl+Space", self._toggle),
+                         ("Ctrl+R", self._shuffle)):
+            act = QAction(self)
+            act.setShortcut(keys)
+            act.setShortcutContext(Qt.WindowShortcut)
+            act.triggered.connect(fn)
+            self.addAction(act)
 
         self._restyle()
         self._build_grid()
-        if self.selected:
-            self.dock.load(self.selected, self.cfg.get("properties", {}).get(self.selected, {}))
+        start = next((w for w in self.lib if w.id == self.selected), None)
+        if start is not None:
+            self._pick(start)
+        self._refresh_hero()
+
+        # The renderer can die, or be stopped from the bar plugin, behind our
+        # back. Cheap to ask (two pgreps), so ask while the window is up.
+        self._poll = QTimer(self, interval=2500)
+        self._poll.timeout.connect(self._poll_running)
+        self._poll.start()
 
     # -- appearance ------------------------------------------------------- #
     def _restyle(self):
         pal = theme.palette(self.cfg.get("ui_theme", theme.DEFAULT),
                             self.cfg.get("ui_accent", ""),
                             engine.palette() if self.cfg.get("ui_follow_wallpaper") else None)
+        try:
+            arrows = theme.arrow_icons(pal, Path.home() / ".cache/fossypaper/ui")
+        except OSError:
+            arrows = None
         self.setStyleSheet(theme.stylesheet(pal, self.cfg.get("ui_font", ""),
-                                            int(self.cfg.get("ui_card_width", 224))))
+                                            int(self.cfg.get("ui_card_width", 224)), arrows))
+
+    def _current_wp(self):
+        cur = self.cfg.get("current", "")
+        return next((w for w in self.lib if w.id == cur), None) if cur else None
+
+    def _refresh_hero(self):
+        self.hero.show_state(self._current_wp(), self.running, self.busy)
+
+    def _poll_running(self):
+        if self.busy or not self.isVisible():
+            return
+        now = engine.is_running()
+        if now != self.running:
+            self.running = now
+            self._refresh_hero()
 
     # -- library ---------------------------------------------------------- #
     def _visible(self):
         q = self.search.text().strip().lower()
+        chip = self.chips.checkedButton()
+        key = chip.property("key") if chip else None
         out = []
         for w in self.lib:
-            if self.hidevid.isChecked() and w.video:
+            if key == "audio" and not w.audio:
                 continue
-            if q and q not in w.title.lower() and q not in w.id.lower():
+            if key and key != "audio" and kind_of(w) != key:
+                continue
+            if q and q not in w.title.lower() and q not in w.id.lower() \
+                    and not any(q in str(t).lower() for t in w.tags):
                 continue
             out.append(w)
+        how = self.sort.currentData()
+        if how == "new":
+            out.sort(key=lambda w: _mtime(w.folder), reverse=True)
+        elif how == "kind":
+            out.sort(key=lambda w: (kind_of(w), w.title.lower()))
+        else:
+            out.sort(key=lambda w: (not w.supported, w.title.lower()))
         return out
 
     def _build_grid(self):
@@ -879,50 +1164,120 @@ class MainWindow(QMainWindow):
         for wp in self._visible():
             c = Card(wp, width)
             c.picked.connect(self._pick)
-            c.opened.connect(lambda w=None: self._apply())
+            c.opened.connect(self._open)
+            c.menu.connect(self._card_menu)
             c.mark(selected=wp.id == self.selected, current=wp.id == current)
             self.cards[wp.id] = c
             widgets.append(c)
         self.grid.set_cards(widgets)
+        if self.stack.currentWidget() is not self.browser:
+            self.stack.setCurrentWidget(self.grid if widgets else self.empty)
         broken = sum(1 for w in self.lib if not engine.backend_for(w)[1])
-        self._status(f"{len(widgets)} shown · {len(self.lib)} in library"
-                     + (f" · {broken} can't render here (see `fossypaper doctor`)" if broken else ""))
+        self.counts.setText(f"{len(widgets)} shown · {len(self.lib)} in library"
+                            + (f" · {broken} can't render here" if broken else ""))
+
+    def _sort_changed(self):
+        self.cfg["ui_sort"] = self.sort.currentData()
+        config.save(self.cfg)
+        self._build_grid()
 
     def _pick(self, wp):
+        if wp is None:
+            return
+        if self.stack.currentWidget() is self.grid:
+            self.grid.setFocus()
         self.selected = wp.id
         current = self.cfg.get("current", "")
         for wid, card in self.cards.items():
             card.mark(selected=wid == wp.id, current=wid == current)
+        self.dock.describe(wp, wp.id == current)
         self.dock.load(wp.id, self.cfg.get("properties", {}).get(wp.id, {}))
-        self._status(f"{wp.title} · {wp.type}"
-                     + (" · video-backed" if wp.video and wp.type != "video" else "")
-                     + (" · audio-reactive" if wp.audio else ""))
+        note = engine.why_unsupported(wp) or engine.render_note(wp)
+        self._status(f"{wp.title}" + (f" — {note}" if note else ""))
+
+    def _open(self, wp):
+        self._pick(wp)
+        self._apply()
+
+    def _card_menu(self, wp, pos):
+        m = QMenu(self)
+        m.addAction("Set as wallpaper", self._apply).setEnabled(engine.backend_for(wp)[1])
+        m.addSeparator()
+        m.addAction("Open folder", lambda: QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(wp.folder))))
+        m.addAction("Copy id", lambda: QApplication.clipboard().setText(wp.id))
+        m.exec(pos)
 
     # -- actions ---------------------------------------------------------- #
-    def _apply(self):
-        if not self.selected:
+    def _apply(self, wid=None):
+        wid = wid if isinstance(wid, str) else self.selected
+        if not wid:
             self._status("pick a wallpaper first")
             return
+        if self.busy:
+            return
         o = config.opts(self.cfg)
-        o["properties"] = self.cfg.get("properties", {}).get(self.selected, {})
-        ok, msg = engine.start(self.selected, o)
+        o["properties"] = self.cfg.get("properties", {}).get(wid, {})
+        wp = next((w for w in self.lib if w.id == wid), None)
+        self.busy = "SUMMONING…"
+        self.hero.show_state(wp, False, self.busy)
+        self._status(f"starting {wp.title if wp else wid}…")
+        # start() waits a moment to see the renderer survive its first frames;
+        # that wait belongs on a worker, not on the window.
+        self.jobs.start(lambda: engine.start(wid, o), self._applied, self._apply_failed, tag=wid)
+
+    def _applied(self, wid, result):
+        ok, msg = result
+        self.busy = ""
         if ok:
-            self.cfg["current"] = self.selected
+            self.cfg["current"] = wid
             config.save(self.cfg)
-            for wid, card in self.cards.items():
-                card.mark(current=wid == self.selected)
+            for w, card in self.cards.items():
+                card.mark(current=w == wid)
+            if self.selected == wid:
+                self.dock.describe(self._current_wp(), True)
             if self.cfg.get("theme_on_apply"):
                 self._theme()
+        self.running = engine.is_running()
+        self._refresh_hero()
         self._status(msg)
 
-    def _off(self):
-        engine.stop()
-        self._status("wallpaper off")
+    def _apply_failed(self, wid, message):
+        self.busy = ""
+        self.running = engine.is_running()
+        self._refresh_hero()
+        self._status(f"couldn't start it: {message}")
+
+    def _toggle(self):
+        if self.busy:
+            return
+        if self.running:
+            engine.stop()
+            self.running = False
+            self._refresh_hero()
+            self._status("wallpaper off")
+        else:
+            wid = self.cfg.get("current") or self.selected
+            if wid:
+                self._apply(wid)
+
+    def _shuffle(self):
+        cur = self.cfg.get("current", "")
+        pool = [w for w in self._visible() if engine.backend_for(w)[1] and w.id != cur] \
+            or [w for w in self.lib if engine.backend_for(w)[1] and w.id != cur]
+        if not pool:
+            self._status("nothing else to shuffle to")
+            return
+        wp = random.choice(pool)
+        self._pick(wp)
+        if wp.id in self.cards:
+            self.grid.ensureWidgetVisible(self.cards[wp.id])
+        self._apply(wp.id)
 
     def _theme(self):
-        if not self.selected:
+        wid = self.cfg.get("current") or self.selected
+        if not wid:
             return
-        wid = self.selected
         opts = config.opts(self.cfg)
         backend = self.cfg.get("theme_backend", "builtin")
         self._status("rendering a frame and reading its colours…")
@@ -949,18 +1304,46 @@ class MainWindow(QMainWindow):
             store.pop(wid, None)
         config.save(self.cfg)
         self.selected = wid
-        self._apply()
+        self._apply(wid)
+
+    def _show(self, page):
+        on_browser = page is self.browser
+        self.tab_lib.setChecked(not on_browser)
+        self.tab_web.setChecked(on_browser)
+        self.chip_row.setVisible(not on_browser)
+        self.sort.setVisible(not on_browser)
+        self.search.setVisible(not on_browser)
+        self.dock.setVisible(not on_browser)
+        if on_browser:
+            self.stack.setCurrentWidget(self.browser)
+            if not self.browser.rows:
+                self.browser.search(reset=True)
+            self.browser.query.setFocus()
+        else:
+            self._build_grid()
 
     def _toggle_browse(self):
-        on_browser = self.stack.currentWidget() is self.browser
-        self.stack.setCurrentWidget(self.grid if on_browser else self.browser)
-        self.dock.setVisible(on_browser)
-        if not on_browser and not self.browser.rows:
-            self.browser.search(reset=True)
+        self._show(self.grid if self.stack.currentWidget() is self.browser else self.browser)
+
+    def _focus_search(self):
+        if self.stack.currentWidget() is self.browser:
+            self.browser.query.setFocus()
+        else:
+            self.search.setFocus()
+            self.search.selectAll()
+
+    def _escape(self):
+        if self.search.hasFocus() and self.search.text():
+            self.search.clear()
+        elif self.stack.currentWidget() is self.browser:
+            self._show(self.grid)
+        else:
+            self.grid.setFocus()
 
     def _refresh(self):
         self.lib = engine.scan_library()
         self._build_grid()
+        self._refresh_hero()
 
     def _settings(self):
         d = SettingsDialog(self.cfg, self)
@@ -975,11 +1358,19 @@ class MainWindow(QMainWindow):
         DocDialog(self).exec()
 
     def _status(self, m):
-        self.statusBar().showMessage(str(m))
+        self.statusBar().showMessage(str(m), 12000)
 
     def closeEvent(self, e):
+        self._poll.stop()
         self.jobs.wait()
         super().closeEvent(e)
+
+
+def _mtime(folder) -> float:
+    try:
+        return folder.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def main():
