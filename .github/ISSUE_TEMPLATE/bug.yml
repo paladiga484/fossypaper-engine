@@ -1,0 +1,41 @@
+name: Something doesn't render or doesn't work
+description: A wallpaper that won't draw, draws wrong, or a frontend that misbehaves
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't paste anything you wouldn't post publicly — `fossypaper doctor`
+        prints paths under your home directory; trim your username if you like.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: input
+    id: wallpaper
+    attributes:
+      label: Workshop id / title of the wallpaper (if it's one wallpaper)
+  - type: dropdown
+    id: desktop
+    attributes:
+      label: Desktop
+      options: [Hyprland, niri, sway / other wlroots, KDE Plasma, GNOME, X11 window manager, other]
+    validations:
+      required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Where you saw it
+      options: [fossypaper (GUI), lazypaper (TUI), CLI, Noctalia plugin, Plasma wallpaper settings]
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `fossypaper doctor`
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Last lines of ~/.local/state/fossypaper/renderer.log (layer-shell / X11)
+      render: text

@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test tools
+        # the suite needs no Qt and no renderer; Pillow is the one runtime dep it touches
+        run: python -m pip install --disable-pip-version-check pyflakes pillow
+      - name: Lint
+        run: python -m pyflakes fossypaper tests
+      - name: Test
+        run: python -m unittest discover -s tests -v
+      - name: Wheel builds and carries the engine package
+        run: |
+          python -m pip install --disable-pip-version-check build
+          python -m build --wheel
+          python -m zipfile -l dist/*.whl | grep -q 'fossypaper/engine/render.py'
+          python -m zipfile -l dist/*.whl | grep -q 'fossypaper/qml/preflight.qml'
+
+  desktop-files:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y --no-install-recommends desktop-file-utils
+      - run: desktop-file-validate data/*.desktop
+      - name: Plasma wallpaper metadata is valid JSON
+        run: python3 -m json.tool plasma-wallpaper/org.fossypaper.wallpaper/metadata.json > /dev/null
