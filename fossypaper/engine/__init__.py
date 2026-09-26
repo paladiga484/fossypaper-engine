@@ -25,7 +25,7 @@ patches the submodule that defines a name, and every caller sees it.
 """
 from __future__ import annotations
 
-from . import tools, library, session, plasma, gnome, x11, render, media, colours, service
+from . import tools, library, session, plasma, gnome, x11, render, media, colours, service, selftest
 
 from .tools import (
     STATE, _WHICH, which, BIN, have_renderer,
@@ -42,7 +42,7 @@ from .session import (
     gpu_env, _dgpu, outputs, _outputs_hypr, _outputs_niri, _outputs_kde, compositor,
     FULLSCREEN_BLIND, fullscreen_blind, HOSTS, _HOST, host, detect_host,
     _BACKDROP_SHELLS, _BACKDROP_TTL, _backdrop_cache, _running_comms, backdrop_shell,
-    resolved_layer, assets_dir, _outputs_wlr, _outputs_drm, target_outputs,
+    resolved_layer, assets_dir, _outputs_wlr, _outputs_drm, target_outputs, missing_output,
 )
 from .plasma import (
     PLASMA_PLUGIN, _PLASMA_PREV, _SCENE_MODULE, plasma_plugin_installed,
@@ -86,7 +86,7 @@ def forget_tools() -> None:
 
 
 __all__ = [
-    'tools', 'library', 'session', 'plasma', 'gnome', 'x11', 'render', 'media',
+    'selftest', 'tools', 'library', 'session', 'plasma', 'gnome', 'x11', 'render', 'media',
     'colours', 'service', 'STATE', '_WHICH', 'which', 'BIN', 'have_renderer',
     'STEAM_WORKSHOP', 'FLATPAK_WORKSHOP', 'OWN_LIBRARY', 'library_roots', '_DirProxy',
     'WE_DIR', 'Property', 'Wallpaper', '_PREVIEW_GLOB', '_preview', '_VIDEO_EXT',
@@ -98,7 +98,7 @@ __all__ = [
     '_outputs_niri', '_outputs_kde', 'compositor', 'FULLSCREEN_BLIND',
     'fullscreen_blind', 'HOSTS', '_HOST', 'host', 'detect_host', '_BACKDROP_SHELLS',
     '_BACKDROP_TTL', '_backdrop_cache', '_running_comms', 'backdrop_shell',
-    'resolved_layer', 'assets_dir', '_outputs_wlr', '_outputs_drm', 'target_outputs',
+    'resolved_layer', 'assets_dir', '_outputs_wlr', '_outputs_drm', 'target_outputs', 'missing_output',
     'PLASMA_PLUGIN', '_PLASMA_PREV', '_SCENE_MODULE', 'plasma_plugin_installed',
     'plasma_scene_module', '_PREFLIGHT', '_PREFLIGHT_QML', 'plasma_preflight', '_qdbus',
     'plasma_eval', 'plasma_config', '_typed', 'plasma_script', '_start_plasma',

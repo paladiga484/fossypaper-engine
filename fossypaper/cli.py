@@ -300,6 +300,8 @@ def cmd_sddm(a):
 
 def cmd_doctor(a):
     """What's here, what isn't, and what that costs you."""
+    if getattr(a, "live", False):
+        return _doctor_live(a)
     b = engine.backends_status()
     lib = engine.scan_library()
     bad = [w for w in lib if not engine.backend_for(w)[1]]
@@ -319,6 +321,9 @@ def cmd_doctor(a):
     o = config.opts(config.load())
     h = engine.host(o)
     print(f"compositor    : {comp}")
+    if engine.missing_output(o):
+        print(f"output        : ! '{o['output']}' is pinned but not connected — drawing on every "
+              "screen instead (a MUX switch renames the laptop panel; set output to blank)")
     print(f"desktop host  : {h}" + ("  (auto)" if o.get("host", "auto") == "auto" else "  (forced)"))
     if h == "layer":
         shell = engine.backdrop_shell()
@@ -375,6 +380,21 @@ def cmd_doctor(a):
         for w in bad[:10]:
             print(f"  {w.id:12} {w.title[:40]:40} {engine.why_unsupported(w) or 'missing tool'}")
     return 0
+
+
+def _doctor_live(a):
+    cfg = config.load()
+    o = config.opts(cfg)
+    if engine.host(o) != "layer":
+        print(f"--live checks layer-shell desktops (Hyprland, niri, sway…); this one is "
+              f"'{engine.host(o)}'. Plain `fossypaper doctor` covers it.")
+        return 1
+    print("applying one wallpaper of each kind for a few seconds each — "
+          "yours comes back at the end\n")
+    results, text = engine.selftest.run(o, cfg.get("current", ""))
+    print(text)
+    print(f"saved to {engine.selftest.REPORT}")
+    return 0 if all(not r["problems"] for r in results) else 2
 
 
 def cmd_privacy(a):
@@ -468,7 +488,11 @@ def build_parser():
     s = sub.add_parser("sddm", help="render the wallpaper as an SDDM login background")
     s.add_argument("id", nargs="?"); s.set_defaults(fn=cmd_sddm)
 
-    sub.add_parser("doctor", help="what's installed, and what it costs you").set_defaults(fn=cmd_doctor)
+    d = sub.add_parser("doctor", help="what's installed, and what it costs you")
+    d.add_argument("--live", action="store_true",
+                   help="apply one wallpaper of each kind for a few seconds and check it really "
+                        "shows (layer-shell desktops); restores yours afterwards")
+    d.set_defaults(fn=cmd_doctor)
     s = sub.add_parser("privacy", help="what fossypaper sends, and where")
     s.add_argument("--terms", action="store_true", help="show the terms instead")
     s.set_defaults(fn=cmd_privacy)

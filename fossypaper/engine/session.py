@@ -225,6 +225,16 @@ def target_outputs(opts: dict) -> list[str]:
     them — the common case on a laptop, and correct on a multi-head desk."""
     want = (opts.get("output") or "").strip()
     live = outputs()
-    if want:
+    if want and (not live or want in live):
         return [want]
+    # A pinned name the compositor doesn't have is almost always the laptop
+    # panel after a MUX switch (eDP-1 on the dGPU, eDP-2 on the iGPU): the
+    # renderer would refuse it outright. Draw on what's actually there.
     return live or ["eDP-1"]
+
+
+def missing_output(opts: dict) -> str:
+    """The pinned `output`, if the compositor no longer has it."""
+    want = (opts.get("output") or "").strip()
+    live = outputs()
+    return want if want and live and want not in live else ""

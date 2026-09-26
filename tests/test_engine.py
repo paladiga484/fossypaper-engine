@@ -757,5 +757,50 @@ class LazypaperTest(unittest.TestCase):
             self.assertIsNone(tui.window_argv(["lazypaper"]))
 
 
+class LayerShellLiveTest(unittest.TestCase):
+    """What `doctor --live` concludes from the compositor's own answers."""
+
+    def test_parses_both_compositors(self):
+        from fossypaper.engine import selftest
+        hypr = {"eDP-1": {"levels": {"0": [{"namespace": "noctalia-wallpaper"}],
+                                      "1": [{"namespace": "linux-wallpaperengine"}],
+                                      "2": [{"namespace": "noctalia-bar"}]}}}
+        got = selftest.parse_hypr_layers(hypr)
+        self.assertIn({"namespace": "linux-wallpaperengine", "output": "eDP-1", "layer": "bottom"}, got)
+        niri = [{"namespace": "quickshell:iiBackdrop", "output": "eDP-2", "layer": "Background"},
+                {"namespace": "mpvpaper", "output": "eDP-2", "layer": "Bottom"}]
+        self.assertEqual(selftest.ours(selftest.parse_niri_layers(niri), "mpvpaper"),
+                         [{"namespace": "mpvpaper", "output": "eDP-2", "layer": "bottom"}])
+
+    def test_wrong_layer_and_black_screen_are_reported(self):
+        from unittest.mock import patch
+        from fossypaper.engine import selftest
+        wp = engine.Wallpaper(id="1", title="t", type="scene", video=False, preview=None,
+                              folder=Path("/nonexistent"), entry=Path("/nonexistent/scene.pkg"))
+        with patch.object(engine.render, "backend_for", return_value=("wpe", True)), \
+             patch.object(engine.render, "start", return_value=(True, "applied via wpe")), \
+             patch.object(engine.render, "is_running", return_value=True), \
+             patch.object(engine.render, "render_log_tail", return_value=[]), \
+             patch.object(engine.session, "compositor", return_value="hyprland"), \
+             patch.object(engine.session, "resolved_layer", return_value="bottom"), \
+             patch.object(selftest, "layers", return_value=[
+                 {"namespace": "linux-wallpaperengine", "output": "eDP-1", "layer": "background"}]), \
+             patch.object(selftest, "grab", return_value=Path("/x.png")), \
+             patch.object(selftest, "brightness", return_value=0.5):
+            res = selftest.check(wp, {}, settle=0)
+        self.assertTrue(any("background layer, expected bottom" in p for p in res["problems"]))
+        self.assertTrue(any("black" in p for p in res["problems"]))
+
+    def test_a_pinned_output_that_vanished_falls_back_to_the_live_ones(self):
+        """eDP-1 on the dGPU is eDP-2 on the iGPU: a pinned name must not strand the renderer."""
+        from unittest.mock import patch
+        with patch.object(engine.session, "outputs", return_value=["eDP-2"]):
+            self.assertEqual(engine.target_outputs({"output": "eDP-1"}), ["eDP-2"])
+            self.assertEqual(engine.missing_output({"output": "eDP-1"}), "eDP-1")
+            self.assertEqual(engine.target_outputs({"output": "eDP-2"}), ["eDP-2"])
+        with patch.object(engine.session, "outputs", return_value=[]):
+            self.assertEqual(engine.target_outputs({"output": "HDMI-A-1"}), ["HDMI-A-1"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

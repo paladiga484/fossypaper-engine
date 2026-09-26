@@ -231,6 +231,9 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
     if dead is not None:
         why = "; ".join(render_log_tail(2)) or f"exit code {dead.returncode}"
         return False, f"{be} exited straight away — {why} (full log: {RENDER_LOG})"
+    gone = session.missing_output(opts)
+    if gone:
+        return True, f"applied via {be} — {gone} isn't connected (MUX switch?), so it's on every screen"
     return True, f"applied via {be}"
 
 
