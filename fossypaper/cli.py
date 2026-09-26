@@ -352,6 +352,19 @@ def cmd_doctor(a):
     if h == "layer" and o["layer"] == "auto" and engine.backdrop_shell():
         print(f"\n  i {engine.backdrop_shell()} draws its own wallpaper, so this sits one layer up")
         print("    (bottom). Turn the shell's wallpaper off and it becomes a true background.")
+    if comp == "hyprland":
+        print("\n  i lazypaper's launcher entry opens its own window (app-id lazypaper). To float it:")
+        print("      windowrule = float on, match:class ^(lazypaper)$")
+        print("      windowrule = size 1400 900, match:class ^(lazypaper)$")
+        print("      windowrule = center on, match:class ^(lazypaper)$")
+    if comp == "niri":
+        print("\n  i lazypaper's launcher entry opens its own window (app-id lazypaper). To float it:")
+        print('      window-rule {')
+        print('          match app-id="^lazypaper$"')
+        print('          open-floating true')
+        print('          default-column-width { fixed 1400; }')
+        print('          default-window-height { fixed 900; }')
+        print('      }')
     if engine.fullscreen_blind():
         print(f"\n  ! {comp} gives the renderer no way to see fullscreen windows, so the")
         print("    wallpaper keeps rendering behind games. Turn it off before playing")
@@ -385,6 +398,9 @@ def cmd_gui(a):
 
 
 def cmd_tui(a):
+    if getattr(a, "window", False):
+        from .tui import open_window
+        return open_window()
     from .tui import main as m
     return m()
 
@@ -457,7 +473,10 @@ def build_parser():
     s.set_defaults(fn=cmd_privacy)
 
     sub.add_parser("gui", help="launch the fossypaper GUI").set_defaults(fn=cmd_gui)
-    sub.add_parser("tui", help="launch the lazypaper TUI").set_defaults(fn=cmd_tui)
+    t = sub.add_parser("tui", help="launch the lazypaper TUI")
+    t.add_argument("--window", action="store_true",
+                   help="open in its own terminal window (app-id 'lazypaper'), for launchers")
+    t.set_defaults(fn=cmd_tui)
     return p
 
 

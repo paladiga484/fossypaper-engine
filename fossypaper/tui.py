@@ -98,16 +98,37 @@ def A(role=0):
 SEL = curses.A_REVERSE
 
 
+_VS16, _ZWJ = "\ufe0f", "\u200d"
+
+
+def _glyphs(s: str):
+    """(text, columns) per glyph as a terminal lays it out. CJK is two cells.
+    U+FE0F (emoji presentation) is dropped: kitty widens `🕊️` to two cells,
+    tmux and others keep it at one, and a title like `[🕊️] Columbina`
+    shoved the rest of its row sideways on whichever one we guessed wrong.
+    Without the selector every terminal agrees. Combining marks and joiners
+    ride along at zero width."""
+    s = str(s)
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == _VS16:
+            i += 1
+            continue
+        w = 0 if unicodedata.combining(ch) or ch == _ZWJ else \
+            (2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1)
+        j = i + 1
+        while j < len(s) and (s[j] == _ZWJ or unicodedata.combining(s[j])):
+            j += 1
+        yield s[i:j], w
+        i = j
+
+
 def cells(s: str) -> int:
     """Terminal columns a string occupies. CJK titles are two cells per glyph,
     and this library is full of them — measuring in characters puts the badge
     column and the right border in different places on every other row."""
-    n = 0
-    for ch in str(s):
-        if unicodedata.combining(ch):
-            continue
-        n += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-    return n
+    return sum(w for _g, w in _glyphs(s))
 
 
 def fit(s: str, width: int) -> str:
@@ -115,12 +136,10 @@ def fit(s: str, width: int) -> str:
     if width <= 0:
         return ""
     out, n = [], 0
-    for ch in str(s):
-        c = 0 if unicodedata.combining(ch) else \
-            (2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1)
+    for g, c in _glyphs(s):
         if n + c > width:
             break
-        out.append(ch)
+        out.append(g)
         n += c
     return "".join(out)
 
@@ -828,6 +847,45 @@ def _mtime(folder) -> float:
         return folder.stat().st_mtime
     except OSError:
         return 0.0
+
+
+APP_ID = "lazypaper"
+
+
+def window_argv(cmd: list[str]) -> list[str] | None:
+    """How to open `cmd` in a terminal window of its own, tagged with app-id
+    `lazypaper` so niri/Hyprland window rules can float and size it.
+
+    Launchers on tiling compositors disagree about `Terminal=true` — some run
+    the entry in no terminal at all — so the desktop entry asks for this
+    instead. The desktop's own default terminal wins (xdg-terminal-exec),
+    then whichever common one is installed."""
+    if engine.which("xdg-terminal-exec"):
+        return ["xdg-terminal-exec", f"--app-id={APP_ID}", f"--title={APP_ID}", "--", *cmd]
+    for term, argv in (
+            ("kitty", ["kitty", "--class", APP_ID, "--title", APP_ID]),
+            ("foot", ["foot", "--app-id", APP_ID, "--title", APP_ID]),
+            ("ghostty", ["ghostty", f"--class={APP_ID}", f"--title={APP_ID}", "-e"]),
+            ("alacritty", ["alacritty", "--class", APP_ID, "--title", APP_ID, "-e"]),
+            ("wezterm", ["wezterm", "start", "--class", APP_ID, "--"]),
+            ("konsole", ["konsole", "-p", f"tabtitle={APP_ID}", "-e"]),
+            ("gnome-terminal", ["gnome-terminal", f"--title={APP_ID}", "--"])):
+        if engine.which(term):
+            return [*argv, *cmd]
+    return None
+
+
+def open_window() -> int:
+    import subprocess
+    import sys
+    argv = window_argv([sys.executable, "-m", "fossypaper", "tui"])
+    if argv is None:
+        print("lazypaper: no terminal found to open a window in "
+              "(install kitty, foot, ghostty, alacritty or xdg-terminal-exec)")
+        return 1
+    subprocess.Popen(argv, start_new_session=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
+    return 0
 
 
 def main():

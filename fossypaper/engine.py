@@ -504,14 +504,35 @@ def kind_of(wp: Wallpaper) -> str:
 # Processes that draw their *own* backdrop on the background layer. With one
 # running, a "background" wallpaper would fight it for the same slot, so
 # `layer: auto` goes one up to "bottom" — above their backdrop, below windows.
-_BACKDROP_SHELLS = ("qs", "quickshell", "swaybg", "hyprpaper", "wpaperd", "wbg")
+# Noctalia 5 runs as its own `noctalia` binary; iNiR and older Noctalia are
+# Quickshell (`qs`). Missing one means `auto` picks "background" and the
+# wallpaper fights the shell's own backdrop for the same layer — and loses.
+_BACKDROP_SHELLS = ("noctalia", "qs", "quickshell", "swaybg", "hyprpaper", "wpaperd", "wbg")
+_BACKDROP_TTL = 3.0
+_backdrop_cache: list = [0.0, ""]
+
+
+def _running_comms() -> set[str]:
+    """Every process name, in one pass over /proc — one `pgrep` per candidate
+    was six forks per redraw of the TUI's details pane."""
+    names = set()
+    for d in Path("/proc").iterdir():
+        if d.name.isdigit():
+            try:
+                names.add((d / "comm").read_text().strip())
+            except OSError:
+                continue
+    return names
 
 
 def backdrop_shell() -> str:
-    for name in _BACKDROP_SHELLS:
-        if subprocess.run(["pgrep", "-x", name], capture_output=True).returncode == 0:
-            return name
-    return ""
+    now = time.monotonic()
+    if now - _backdrop_cache[0] < _BACKDROP_TTL:
+        return _backdrop_cache[1]
+    comms = _running_comms()
+    found = next((n for n in _BACKDROP_SHELLS if n in comms), "")
+    _backdrop_cache[:] = [now, found]
+    return found
 
 
 def resolved_layer(opts: dict) -> str:
@@ -855,8 +876,22 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
     return True, "applied as a Plasma wallpaper" + "".join(" — " + n for n in notes)
 
 
+def _bus_has(name: str) -> bool:
+    """Is `name` owned on the session bus right now? Asking a name that isn't
+    there is how D-Bus activation starts things — never poke plasmashell from
+    a Hyprland or niri session just to find out."""
+    try:
+        r = subprocess.run(["dbus-send", "--session", "--print-reply", "--dest=org.freedesktop.DBus",
+                            "/org/freedesktop/DBus", "org.freedesktop.DBus.NameHasOwner",
+                            f"string:{name}"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and "boolean true" in r.stdout
+
+
 def _plasma_restore() -> None:
-    if not _PLASMA_PREV.is_file():
+    # the marker outlives the session: leave it for the next Plasma login
+    if not _PLASMA_PREV.is_file() or not _bus_has("org.kde.plasmashell"):
         return
     try:
         prev = json.loads(_PLASMA_PREV.read_text() or "{}")

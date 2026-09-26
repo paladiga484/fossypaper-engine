@@ -595,6 +595,27 @@ class HostTest(unittest.TestCase):
             self.assertEqual(engine.resolved_layer({"layer": "auto"}), "bottom")
             self.assertEqual(engine.resolved_layer({"layer": "top"}), "top")
 
+    def test_noctalia_and_quickshell_count_as_a_backdrop(self):
+        for comms, want in (({"noctalia", "bash"}, "noctalia"), ({"qs"}, "qs"),
+                            ({"hyprpaper"}, "hyprpaper"), ({"bash", "kitty"}, "")):
+            engine._backdrop_cache[:] = [0.0, ""]
+            with self.subTest(comms=comms), \
+                 self.patch.object(engine, "_running_comms", return_value=comms):
+                self.assertEqual(engine.backdrop_shell(), want)
+        engine._backdrop_cache[:] = [0.0, ""]
+
+    def test_no_plasma_restore_without_plasmashell(self):
+        """Under Hyprland or niri a leftover Plasma marker must not make every
+        apply call into plasmashell (or D-Bus-activate it)."""
+        prev = self.root / "plasma-previous.json"
+        prev.write_text('{"1": "org.kde.image"}')
+        with self.patch.object(engine, "_PLASMA_PREV", prev), \
+             self.patch.object(engine, "_bus_has", return_value=False), \
+             self.patch.object(engine, "plasma_eval") as ev:
+            engine._plasma_restore()
+        ev.assert_not_called()
+        self.assertTrue(prev.is_file())          # kept for the next Plasma login
+
     def test_argv_carries_the_resolved_layer_and_none_on_x11(self):
         o = {**config.opts(dict(config.DEFAULTS)), "output": "eDP-1"}
         with self.patch.object(engine, "backdrop_shell", return_value=""):
@@ -638,6 +659,7 @@ class HostTest(unittest.TestCase):
         with self.patch.object(engine, "_PLASMA_PREV", prev), \
              self.patch.object(engine, "STATE", self.root), \
              self.patch.object(engine, "plasma_plugin_installed", return_value=True), \
+             self.patch.object(engine, "_bus_has", return_value=True), \
              self.patch.object(engine, "plasma_eval", side_effect=fake_eval):
             ok, msg = engine._start_plasma(wp, {})
             self.assertTrue(ok, msg)
@@ -712,6 +734,29 @@ class SceneEffectsTest(unittest.TestCase):
                     wp = engine.read_wallpaper(self.pkg(root, scene))
                     self.assertEqual(engine.scene_has_effects(wp), want)
                     self.assertEqual(engine.plasma_config(wp, {}, None)["CachePasses"], not want)
+
+
+class LazypaperTest(unittest.TestCase):
+    def test_emoji_presentation_selector_is_dropped(self):
+        """Terminals disagree on how wide VS16 makes a glyph; without it they agree."""
+        from fossypaper import tui
+        self.assertEqual(tui.cells("[\U0001F54A\ufe0f]"), 3)     # [🕊️]
+        self.assertNotIn("\ufe0f", tui.fit("[\U0001F54A\ufe0f]", 10))
+        self.assertEqual(tui.cells("千咲"), 4)
+        self.assertEqual(tui.fit("a千", 2), "a")                       # never half a glyph
+        self.assertEqual(tui.cells(tui.pad("🎭 mask", 10)), 10)
+
+    def test_window_tags_the_app_id(self):
+        from unittest.mock import patch
+        from fossypaper import tui
+        with patch.object(engine, "which", side_effect=lambda n: n == "xdg-terminal-exec" or None):
+            argv = tui.window_argv(["lazypaper"])
+        self.assertIn("--app-id=lazypaper", argv)
+        self.assertEqual(argv[-2:], ["--", "lazypaper"])
+        with patch.object(engine, "which", side_effect=lambda n: n == "foot" or None):
+            self.assertEqual(tui.window_argv(["lazypaper"])[:3], ["foot", "--app-id", "lazypaper"])
+        with patch.object(engine, "which", return_value=None):
+            self.assertIsNone(tui.window_argv(["lazypaper"]))
 
 
 if __name__ == "__main__":

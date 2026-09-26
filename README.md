@@ -9,6 +9,10 @@ compositors, KDE Plasma and GNOME, and on bare X11 window managers.
   built from each wallpaper's own schema, a built-in Wallhaven + Steam Workshop
   browser, flat themes you can change.
 - **`lazypaper`** — the same thing in the terminal, in your terminal's colours.
+  From a launcher it opens its own window with app-id `lazypaper` (your default
+  terminal via `xdg-terminal-exec`, else kitty/foot/ghostty/alacritty/wezterm),
+  so it works on niri and Hyprland launchers that ignore `Terminal=true`, and
+  window rules can float it — `fossypaper doctor` prints them.
 - **`fossypaper <cmd>`** — the CLI everything else is built on. `--json` on
   every listing.
 - **Noctalia plugin** — bar widget, library panel, control-centre tile and a
