@@ -646,7 +646,7 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
     if kind == "scene" and not live_scene:
         notes.append("still frame only: " + (
             "no Wallpaper Engine assets folder found" if plasma_scene_module()
-            else "no native scene renderer (plasma6-wallpapers-wallpaper-engine-git)"))
+            else "no native scene renderer (optional: AUR wallpaper-engine-kde-plugin-git)"))
     if kind == "scene" and (opts.get("properties") or wp.preset_overrides):
         notes.append("its custom properties aren't applied on Plasma yet")
     return True, "applied as a Plasma wallpaper" + "".join(" — " + n for n in notes)

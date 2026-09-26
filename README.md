@@ -39,11 +39,14 @@ Desktop, `d` in lazypaper) picks who that is. `auto` reads the session:
 | GNOME | `org.gnome.desktop.background` | still frame | live with the [Hanabi] extension, else a still frame | live |
 | X11 window managers (i3, bspwm, openbox…) | the root window | live | `xwinwrap` + `mpv` | `xwallpaper` or `feh` |
 
-\* `plasma6-wallpapers-wallpaper-engine-git` (CachyOS repo / AUR). fossypaper
-imports **only its compiled `SceneViewer` type**. That package also installs its
-own wallpaper type, "Wallpaper Engine for Kde". Don't select it: its Python
-helper talks to plasmashell over an **unauthenticated local WebSocket server**
-that will read or delete files for any local process that connects.
+\* Optional. `wallpaper-engine-kde-plugin-git` (AUR, RainyPixel's Plasma 6
+port, no Python helper). fossypaper imports **only its compiled `SceneViewer`
+type**; without it, scenes show a still frame and everything else works. Build
+it pinned to a commit you've read (`#commit=` on its `source=` line) — a `-git`
+package otherwise builds whatever was pushed last. Avoid the older
+`plasma6-wallpapers-wallpaper-engine-git`: its upstream was archived in May 2026,
+and its "Wallpaper Engine for Kde" type runs a Python helper with an
+**unauthenticated local WebSocket server** that will read or delete files.
 `fossypaper doctor` warns about this too.
 
 On layer-shell, `layer: auto` means `background`, which is a true wallpaper.

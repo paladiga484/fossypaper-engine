@@ -310,14 +310,13 @@ def cmd_doctor(a):
         print(f"  [{'x' if engine.plasma_plugin_installed() else ' '}] {'fossypaper Plasma wallpaper':24} "
               "registers as a real wallpaper type (./install.sh puts it in place)")
         print(f"  [{'x' if mod else ' '}] {'native scene renderer':24} live scenes on Plasma "
-              "(plasma6-wallpapers-wallpaper-engine-git) — otherwise a still frame")
+              "(optional: AUR wallpaper-engine-kde-plugin-git) — otherwise a still frame")
         print(f"  [{'x' if engine.assets_dir(o) else ' '}] {'WE assets folder':24} "
               "scenes need Wallpaper Engine's own assets (Steam install)")
         if mod:
-            print("\n  ! that package also adds a wallpaper type called \"Wallpaper Engine for Kde\".")
-            print("    Don't pick it in Plasma's wallpaper settings: its helper runs an")
-            print("    unauthenticated WebSocket server that can read any file you can.")
-            print("    fossypaper only loads the scene renderer from it, not that helper.")
+            print("\n  ! the scene renderer package also adds its own wallpaper type. Keep using")
+            print("    fossypaper's — only its SceneViewer is loaded. (The older catsout build's")
+            print("    type runs an unauthenticated WebSocket helper; never select that one.)")
     if h == "gnome":
         print(f"  [{'x' if engine.hanabi_available() else ' '}] {'Hanabi extension':24} "
               "video wallpapers on GNOME — otherwise a still frame")
