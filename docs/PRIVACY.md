@@ -89,7 +89,7 @@ works without either, and hands items to Steam to fetch.
 | Path | What | Remove with |
 | --- | --- | --- |
 | `~/.config/fossypaper/config.json` | your settings and per-wallpaper property overrides | delete the file |
-| `~/.local/state/fossypaper/` | the extracted palette (`colors.json/.sh/.css`), the frame it came from, any SDDM still, and `renderer.log` — the renderer's own output from the last apply, overwritten each time | delete the directory |
+| `~/.local/state/fossypaper/` | the extracted palette (`colors.json/.sh/.css`), the frame it came from, any SDDM still, and `renderer.log` — the renderer's own output from the last apply, overwritten each time, and `plasma-preflight.json` — which scenes the Plasma renderer can load without hanging | delete the directory |
 | `~/.cache/fossypaper/thumbs/` | browser thumbnails, keyed by a hash of their URL | `fossypaper config --reset` does not touch it; delete the directory |
 | `~/.cache/fossypaper/library/` | stills baked from your own local previews | delete the directory |
 | `~/.cache/fossypaper/scene-video/` | the video layer copied out of a scene you applied on Plasma or GNOME | delete the directory |

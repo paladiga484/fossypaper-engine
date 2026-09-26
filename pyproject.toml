@@ -12,6 +12,9 @@ lazypaper = "fossypaper.tui:main"
 [tool.setuptools]
 packages = ["fossypaper"]
 
+[tool.setuptools.package-data]
+fossypaper = ["qml/*.qml"]
+
 
 [build-system]
 requires = ["setuptools>=64"]

@@ -265,6 +265,23 @@ class NoticeTest(unittest.TestCase):
         self.assertEqual(engine._typed("1 0.5 0"), "1 0.5 0")
 
 
+class PreflightTest(unittest.TestCase):
+    def test_a_cached_verdict_skips_the_nested_compositor(self):
+        from unittest.mock import patch
+        tmp = tempfile.TemporaryDirectory()
+        d = Path(tmp.name)
+        pkg = d / "scene.pkg"; pkg.write_bytes(b"x")
+        wp = engine.Wallpaper("5", "t", "scene", False, None, d, entry=pkg)
+        key = f"5:{int(pkg.stat().st_mtime)}:{{}}"
+        (d / "pf.json").write_text(json.dumps({key: {"ok": False, "why": "hangs"}}))
+        with patch.object(engine, "_PREFLIGHT", d / "pf.json"), \
+             patch.object(engine, "find", return_value=wp), \
+             patch.object(engine, "which", return_value="/bin/true"), \
+             patch.object(engine.subprocess, "Popen", side_effect=AssertionError("spawned")):
+            self.assertEqual(engine.plasma_preflight(wp, {}), (False, "hangs"))
+        tmp.cleanup()
+
+
 class SceneVideoTest(unittest.TestCase):
     def test_the_mp4_inside_a_video_texture_comes_out_whole(self):
         import struct

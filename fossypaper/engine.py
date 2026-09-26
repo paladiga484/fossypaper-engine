@@ -566,6 +566,74 @@ def plasma_scene_module() -> Path | None:
     return None
 
 
+_PREFLIGHT = STATE / "plasma-preflight.json"
+_PREFLIGHT_QML = Path(__file__).resolve().parent / "qml" / "preflight.qml"
+
+
+def plasma_preflight(wp: Wallpaper, opts: dict, timeout: float = 25.0) -> tuple[bool, str]:
+    """Would this scene wedge plasmashell? Load it once in a throwaway nested
+    KWin with the same SceneViewer, off the user's screen. Some scenes never
+    finish loading in that renderer, and then its teardown deadlocks — inside
+    plasmashell that is a frozen desktop, garbage GPU memory on the wallpaper,
+    and a shell that ignores SIGTERM. The verdict is cached per package."""
+    rw = find(wp.render_id) or wp
+    pkg = rw.entry
+    qml = which("qml6") or which("qml") or ("/usr/lib/qt6/bin/qml"
+                                             if Path("/usr/lib/qt6/bin/qml").is_file() else None)
+    kwin = which("kwin_wayland")
+    if pkg is None or not qml or not kwin:
+        return True, "preflight unavailable"
+    key = f"{rw.id}:{int(pkg.stat().st_mtime)}:{json.dumps(opts.get('properties') or {}, sort_keys=True)}"
+    try:
+        cache = json.loads(_PREFLIGHT.read_text())
+    except (OSError, ValueError):
+        cache = {}
+    if key in cache:
+        return cache[key]["ok"], cache[key]["why"]
+
+    sock = f"fossypaper-preflight-{os.getpid()}-{time.monotonic_ns()}"
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    comp = subprocess.Popen([kwin, "--virtual", "--width", "640", "--height", "360",
+                             "--socket", sock, "--no-lockscreen"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    ok, why = True, ""
+    try:
+        for _ in range(50):
+            if (runtime / sock).exists():
+                break
+            time.sleep(0.1)
+        else:
+            return True, "preflight compositor didn't start"
+        env = {**os.environ, "WAYLAND_DISPLAY": sock, "QT_QPA_PLATFORM": "wayland"}
+        props = json.dumps({k: _typed(v) for k, v in (opts.get("properties") or {}).items()})
+        proc = subprocess.Popen([qml, str(_PREFLIGHT_QML), "--", props, pkg.resolve().as_uri(),
+                                 Path(assets_dir(opts)).resolve().as_uri()],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, text=True, errors="replace",
+                                start_new_session=True)
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, _ = proc.communicate()
+            ok, why = False, "the Plasma scene renderer hangs on it"
+        else:
+            if "Failed to create wl_display" in out or "Could not load the Qt platform" in out:
+                return True, "preflight couldn't reach its compositor"   # not a verdict: don't cache
+            if proc.returncode != 0:
+                ok, why = False, f"the Plasma scene renderer crashes on it (exit {proc.returncode})"
+        if ok and f"scene '{rw.id}'" not in out and "scene '" not in out:
+            ok, why = False, "the Plasma scene renderer never finishes loading it"
+    finally:
+        comp.kill()
+        comp.wait()
+    cache[key] = {"ok": ok, "why": why}
+    STATE.mkdir(parents=True, exist_ok=True)
+    _PREFLIGHT.write_text(json.dumps(cache, indent=1))
+    return ok, why
+
+
 def _qdbus() -> str | None:
     return which("qdbus6") or which("qdbus")
 
@@ -717,6 +785,13 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
     video = scene_video(wp) if kind == "scene" and opts.get("scene_video", True) else None
     live_scene = kind == "scene" and not video and plasma_scene_module() is not None \
         and assets_dir(opts)
+    unsafe = ""
+    if live_scene and opts.get("plasma_preflight", True):
+        safe, unsafe = plasma_preflight(wp, opts)
+        if safe:
+            unsafe = ""
+        else:
+            live_scene = False
     still = _still_for(wp, opts) if kind == "scene" and not live_scene and not video else None
     ok, out = plasma_eval(plasma_script(plasma_config(wp, opts, still, video)))
     if not ok:
@@ -733,7 +808,9 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
     notes = []
     if video:
         notes.append("playing its video layer; the scene's other layers are skipped on Plasma")
-    if kind == "scene" and not live_scene and not video:
+    if unsafe:
+        notes.append(f"still frame only: {unsafe}, and on your desktop that freezes plasmashell")
+    elif kind == "scene" and not live_scene and not video:
         notes.append("still frame only: " + (
             "no Wallpaper Engine assets folder found" if plasma_scene_module()
             else "no native scene renderer (optional: AUR wallpaper-engine-kde-plugin-git)"))
