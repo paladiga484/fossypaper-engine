@@ -265,6 +265,33 @@ class NoticeTest(unittest.TestCase):
         self.assertEqual(engine._typed("1 0.5 0"), "1 0.5 0")
 
 
+class SceneVideoTest(unittest.TestCase):
+    def test_the_mp4_inside_a_video_texture_comes_out_whole(self):
+        import struct
+        from unittest.mock import patch
+        tmp = tempfile.TemporaryDirectory()
+        d = Path(tmp.name)
+        mp4 = b"\x00\x00\x00\x18ftypisom" + b"V" * 70000
+        tex = b"TEXV0005\x00TEXI0001" + b"\x00" * 60 + struct.pack("<I", len(mp4)) + mp4 + b"TRAIL"
+        files = [("scene.json", b"{}"), ("materials/clip.tex", tex)]
+        head = b"".join(struct.pack("<I", len(n)) + n.encode() + struct.pack("<II", 0, 0)
+                        for n, _ in files)
+        body, entries, off = b"", b"", 0
+        for n, data in files:
+            entries += struct.pack("<I", len(n)) + n.encode() + struct.pack("<II", off, len(data))
+            body += data; off += len(data)
+        pkg = d / "scene.pkg"
+        pkg.write_bytes(struct.pack("<I", 8) + b"PKGV0022" + struct.pack("<I", len(files))
+                        + entries + body)
+        wp = engine.Wallpaper("77", "t", "scene", True, None, d, entry=pkg)
+        with patch.object(engine, "SCENE_VIDEOS", d / "out"), \
+             patch.object(engine, "find", return_value=wp):
+            out = engine.scene_video(wp)
+        self.assertIsNotNone(out)
+        self.assertEqual(out.read_bytes(), mp4)
+        tmp.cleanup()
+
+
 class ArgvTest(unittest.TestCase):
     def base(self, **over):
         return {**config.opts(dict(config.DEFAULTS)), "output": "eDP-1", **over}

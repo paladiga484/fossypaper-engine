@@ -785,6 +785,7 @@ class SettingsDialog(QDialog):
                 "pause_ignore_appids", ",".join(cfg.get("pause_ignore_appids") or []),
                 "comma separated, e.g. mpv,vlc")),
             ("Hide author notices", self._check("hide_author_notices")),
+            ("Play video scenes as video (Plasma, GNOME)", self._check("scene_video")),
             ("Disable particles", self._check("no_particles")),
             ("Disable parallax", self._check("no_parallax")),
             ("Disable mouse interaction", self._check("no_mouse")),

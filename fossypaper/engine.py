@@ -587,12 +587,83 @@ def plasma_eval(script: str) -> tuple[bool, str]:
     return True, r.stdout.strip()
 
 
-def plasma_config(wp: Wallpaper, opts: dict, still: Path | None) -> dict:
+SCENE_VIDEOS = Path.home() / ".cache/fossypaper/scene-video"
+
+
+def _pkg_entries(pkg: Path) -> list[tuple[str, int, int]]:
+    """(name, absolute offset, size) for every file in a WE scene.pkg:
+    PKGV header, a count, then length-prefixed names with offset/size."""
+    import struct
+    with open(pkg, "rb") as f:
+        def s():
+            return f.read(struct.unpack("<I", f.read(4))[0]).decode("utf-8", "replace")
+        if not s().startswith("PKGV"):
+            return []
+        out = []
+        for _ in range(struct.unpack("<I", f.read(4))[0]):
+            name = s()
+            off, size = struct.unpack("<II", f.read(8))
+            out.append((name, off, size))
+        base = f.tell()
+    return [(n, base + o, sz) for n, o, sz in out]
+
+
+def scene_video(wp: Wallpaper) -> Path | None:
+    """The MP4 inside a scene's biggest video texture, extracted to the cache.
+
+    Wallpaper Engine stores video layers as .tex files wrapping a plain MP4,
+    its byte length in the uint32 just before it. The Plasma scene renderer
+    has no video decoder, so these scenes show static noise there; the video
+    on its own is what actually moves."""
+    rw = find(wp.render_id) or wp
+    pkg = rw.entry
+    if pkg is None or pkg.suffix.lower() != ".pkg" or not pkg.is_file():
+        return None
+    out = SCENE_VIDEOS / f"{rw.id}.mp4"
+    if out.is_file() and out.stat().st_mtime >= pkg.stat().st_mtime and out.stat().st_size:
+        return out
+    import struct
+    best = None
+    try:
+        with open(pkg, "rb") as f:
+            for name, off, size in _pkg_entries(pkg):
+                if not name.endswith(".tex") or size < 65536:
+                    continue
+                f.seek(off)
+                head = f.read(4096)
+                i = head.find(b"ftyp") - 4
+                if i < 4:
+                    continue
+                length = struct.unpack("<I", head[i - 4:i])[0]
+                if 0 < length <= size - i and (best is None or length > best[1]):
+                    best = (off + i, length)
+            if best is None:
+                return None
+            SCENE_VIDEOS.mkdir(parents=True, exist_ok=True)
+            f.seek(best[0])
+            tmp = out.with_suffix(".part")
+            with open(tmp, "wb") as w:
+                left = best[1]
+                while left:
+                    chunk = f.read(min(left, 1 << 20))
+                    if not chunk:
+                        break
+                    w.write(chunk)
+                    left -= len(chunk)
+            tmp.replace(out)
+    except (OSError, ValueError):
+        return None
+    return out
+
+
+def plasma_config(wp: Wallpaper, opts: dict, still: Path | None,
+                  video: Path | None = None) -> dict:
     return {
-        "Kind": kind_of(wp),
+        "Kind": "video" if video else kind_of(wp),
         # file:// URLs, percent-encoded here — a title with `#` or `%` in its
         # path would break a URL glued together in QML
-        "Source": wp.entry.resolve().as_uri() if wp.entry is not None else "",
+        "Source": (video.resolve().as_uri() if video else
+                   wp.entry.resolve().as_uri() if wp.entry is not None else ""),
         "Still": still.resolve().as_uri() if still else "",
         "Assets": Path(assets_dir(opts)).resolve().as_uri() if assets_dir(opts) else "",
         "Title": wp.title,
@@ -643,9 +714,11 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
         return False, ("the fossypaper Plasma wallpaper isn't installed — run ./install.sh, "
                        "then `fossypaper apply` again")
     kind = kind_of(wp)
-    live_scene = kind == "scene" and plasma_scene_module() is not None and assets_dir(opts)
-    still = _still_for(wp, opts) if kind == "scene" and not live_scene else None
-    ok, out = plasma_eval(plasma_script(plasma_config(wp, opts, still)))
+    video = scene_video(wp) if kind == "scene" and opts.get("scene_video", True) else None
+    live_scene = kind == "scene" and not video and plasma_scene_module() is not None \
+        and assets_dir(opts)
+    still = _still_for(wp, opts) if kind == "scene" and not live_scene and not video else None
+    ok, out = plasma_eval(plasma_script(plasma_config(wp, opts, still, video)))
     if not ok:
         return False, f"plasmashell refused the wallpaper — {out} (are the widgets locked?)"
     try:
@@ -658,7 +731,9 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
     elif not _PLASMA_PREV.is_file():
         _PLASMA_PREV.write_text("{}")
     notes = []
-    if kind == "scene" and not live_scene:
+    if video:
+        notes.append("playing its video layer; the scene's other layers are skipped on Plasma")
+    if kind == "scene" and not live_scene and not video:
         notes.append("still frame only: " + (
             "no Wallpaper Engine assets folder found" if plasma_scene_module()
             else "no native scene renderer (optional: AUR wallpaper-engine-kde-plugin-git)"))
@@ -741,8 +816,10 @@ def _gnome_set_picture(path: Path, opts: dict) -> tuple[bool, str]:
 def _start_gnome(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
     _gnome_save_previous()
     kind = kind_of(wp)
-    if kind == "video" and hanabi_available():
-        ok, err = _gsettings("set", _HANABI, "video-path", _gv(str(wp.entry)))
+    video = wp.entry if kind == "video" else \
+        (scene_video(wp) if kind == "scene" and opts.get("scene_video", True) else None)
+    if video and hanabi_available():
+        ok, err = _gsettings("set", _HANABI, "video-path", _gv(str(video)))
         if ok:
             return True, "applied via Hanabi"
     if hanabi_available():

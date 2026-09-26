@@ -43,6 +43,7 @@ DEFAULTS = {
     # --- battery / games ------------------------------------------------- #
     "fullscreen_pause": True,          # stop rendering behind a fullscreen app
     "hide_author_notices": True,       # switch off "prompt box" / marketing overlays
+    "scene_video": True,               # Plasma/GNOME: play a scene's video layer on its own
     "pause_only_active": False,        # …only when that window has focus
     "pause_ignore_appids": [],
     # --- state ----------------------------------------------------------- #
@@ -68,7 +69,7 @@ _RENDER_KEYS = ("output", "span", "layer", "host", "fps", "gpu", "scaling", "cla
                 "silent", "volume", "no_automute", "audio_processing",
                 "no_particles", "no_parallax", "no_mouse",
                 "fullscreen_pause", "pause_only_active", "pause_ignore_appids",
-                "hide_author_notices")
+                "hide_author_notices", "scene_video")
 
 
 def load() -> dict:

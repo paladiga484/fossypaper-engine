@@ -80,6 +80,10 @@ WallpaperItem {
                 loops: MediaPlayer.Infinite
                 videoOutput: out
                 audioOutput: audio
+                // a new source (another video, or the same wallpaper reapplied)
+                // leaves the player stopped — start it again unless paused
+                onSourceChanged: if (!root.paused) play()
+                onErrorOccurred: (error, message) => console.warn("fossypaper: video error:", message)
                 Component.onCompleted: if (!root.paused) play()
             }
             Connections {
