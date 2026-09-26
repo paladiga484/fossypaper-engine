@@ -1,36 +1,73 @@
 # fossypaper-engine
 
-A wallpaper manager for Linux that renders **Wallpaper Engine** scenes,
-video and stills — with a browser, per-wallpaper controls, and no Windows in
-sight. It sets a real wallpaper on Hyprland, niri, sway and other wlroots
-compositors, KDE Plasma and GNOME, and on bare X11 window managers.
+[![ci](https://github.com/paladiga484/fossypaper-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/paladiga484/fossypaper-engine/actions/workflows/ci.yml)
+![license: MIT](https://img.shields.io/badge/license-MIT-informational)
+
+**Wallpaper Engine wallpapers on Linux, set as a real wallpaper.** Scenes,
+videos and stills from your Steam Workshop library, on Hyprland, niri, sway,
+KDE Plasma, GNOME and bare X11 window managers. It comes with a desktop app, a
+terminal app and a CLI, and it has two rules it won't bend:
+**nothing listens** (no port, no local server, no daemon) and **no telemetry**.
+
+![fossypaper, the desktop app](docs/screenshots/fossypaper.png)
+
+![lazypaper, the terminal app](docs/screenshots/lazypaper.png)
+
+<sub>Screenshots come from a generated demo library (`scripts/screenshots.sh`),
+not anyone's Workshop art.</sub>
+
+## What you get
 
 - **`fossypaper`** — the desktop app: thumbnail library, a live property editor
   built from each wallpaper's own schema, a built-in Wallhaven + Steam Workshop
-  browser, flat themes you can change.
-- **`lazypaper`** — the same thing in the terminal, in your terminal's colours.
-  From a launcher it opens its own window with app-id `lazypaper` (your default
-  terminal via `xdg-terminal-exec`, else kitty/foot/ghostty/alacritty/wezterm),
-  so it works on niri and Hyprland launchers that ignore `Terminal=true`, and
-  window rules can float it — `fossypaper doctor` prints them.
-- **`fossypaper <cmd>`** — the CLI everything else is built on. `--json` on
-  every listing.
+  browser, and flat themes (including four horror ones) you can change.
+- **`lazypaper`** — the same thing in the terminal, drawn in your terminal's
+  own colours. From a launcher it opens its own window with app-id `lazypaper`,
+  so it works with launchers that ignore `Terminal=true`, and a window rule can
+  float it (`fossypaper doctor` prints one for niri and one for Hyprland).
+- **`fossypaper <cmd>`** — the CLI everything else is built on, with `--json`
+  on every listing.
 - **Noctalia plugin** — bar widget, library panel, control-centre tile and a
-  `/wp` launcher provider. See `noctalia-plugin/fossypaper/README.md`.
-- **Plasma wallpaper type** — `plasma-wallpaper/org.fossypaper.wallpaper`, so on
-  KDE the wallpaper is registered with Plasma instead of floating over it.
+  `/wp` launcher provider. See [`noctalia-plugin/fossypaper`](noctalia-plugin/fossypaper/README.md).
+- **Plasma wallpaper type** — on KDE the wallpaper is registered with Plasma
+  (it shows up in *Configure Desktop → Wallpaper type*) instead of floating
+  over your desktop icons.
+
+## Install
+
+**Arch / CachyOS / Manjaro** — build the package from [`packaging/arch`](packaging/arch):
+
+```
+git clone https://github.com/paladiga484/fossypaper-engine
+cd fossypaper-engine/packaging/arch && makepkg -si
+```
+
+**Anywhere else**, or to run from a checkout (everything goes under `$HOME`, no root):
 
 ```
 ./install.sh
-fossypaper doctor
 ```
 
-Needs `PySide6`, `Pillow`, `linux-wallpaperengine`, and `mpvpaper` for video.
-`swww`, `steamcmd` and `ffmpeg` are optional; `doctor` says what each buys you.
+Then:
 
----
+```
+fossypaper doctor     # what's here, what's missing, and what each piece buys you
+```
 
-## Every desktop
+You need `PySide6` and `Pillow`. The renderers depend on your desktop, and
+`doctor` tells you which ones matter on yours:
+
+| Desktop | Install |
+| --- | --- |
+| Hyprland, niri, sway… | `linux-wallpaperengine` for scenes, `mpvpaper` for video, `swww` optional for stills |
+| KDE Plasma | `qt6-multimedia` for video, `qt6-tools` for `qdbus6`; optionally `wallpaper-engine-kde-plugin-git` for live scenes |
+| GNOME | the [Hanabi] extension for video (optional) |
+| X11 window manager | `linux-wallpaperengine`, `xwallpaper` or `feh`, `xwinwrap` + `mpv` for video |
+
+`ffmpeg` (palettes and stills from videos) and `steamcmd` (Workshop downloads
+from inside the app) are optional everywhere.
+
+## How it becomes *the* wallpaper
 
 A wallpaper has to be drawn by whoever owns the desktop background, or it ends
 up as a window sitting on top of your icons. `host` (Settings → Render →
@@ -63,9 +100,9 @@ rule that keeps it visible in the overview.
 GNOME's Mutter has no layer-shell, so nothing can render a live scene there.
 The still frame is the best anyone can do without a GNOME Shell extension.
 
-[Hanabi]: https://github.com/jeffshee/gnome-ext-hanabi
-
 ## What it renders
+
+On layer-shell compositors and X11 (Plasma and GNOME draw it themselves, as above):
 
 | Wallpaper Engine type | Rendered by | Notes |
 | --- | --- | --- |
@@ -181,17 +218,43 @@ fossypaper doctor · privacy [--terms]
 fossypaper gui · tui
 ```
 
-## Tests
+## Project layout
 
 ```
-python3 -m unittest discover -s tests
+fossypaper/
+  engine/        the backend: no Qt, no curses, tested headless
+    library.py     roots, project.json, presets, scene packages
+    session.py     compositor, outputs, GPU/EGL, who owns the background
+    render.py      routing and the layer-shell renderers
+    plasma.py      the Plasma wallpaper type, over plasmashell's D-Bus
+    gnome.py x11.py  the other hosts
+    media.py colours.py service.py  stills and thumbnails, palettes, autostart
+  app.py         the Qt app          tui.py     lazypaper
+  cli.py         the CLI             sources.py Wallhaven + Workshop
+plasma-wallpaper/  the Plasma wallpaper type (plain QML)
+noctalia-plugin/   the Noctalia plugin (Luau)
+packaging/arch/    PKGBUILD
+scripts/           demo library + screenshot generator
 ```
 
-They run headless, and the last few run the scanner and the argv builder over
-whatever library the machine actually has.
+## Contributing
+
+```
+python3 -m unittest discover -s tests       # headless; no Qt, no renderer needed
+python3 -m pyflakes fossypaper tests
+noctalia plugins lint noctalia-plugin/fossypaper
+```
+
+CI runs the first two on Python 3.10, 3.12 and 3.14. The two rules above are
+not up for debate: a change that needs a listening socket, a local server, a
+helper daemon or any phone-home won't be merged, however useful it is. That
+is also why `web` wallpapers stay unsupported.
 
 ## Not affiliated with Wallpaper Engine
 
 Wallpaper Engine is a commercial product by Kristjan Skutta. fossypaper is an
 independent program that renders some of the same content through
-`linux-wallpaperengine`. MIT licensed; see `LICENSE`.
+`linux-wallpaperengine` and other open renderers. MIT licensed; see
+[`LICENSE`](LICENSE).
+
+[Hanabi]: https://github.com/jeffshee/gnome-ext-hanabi
