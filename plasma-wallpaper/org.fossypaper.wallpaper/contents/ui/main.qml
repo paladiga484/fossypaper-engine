@@ -109,6 +109,7 @@ WallpaperItem {
             item.fillMode = Qt.binding(() => root.cfg.Fit);
             item.paused = Qt.binding(() => root.paused);
             item.props = Qt.binding(() => root.cfg.Props || "{}");
+            item.mouse = Qt.binding(() => root.cfg.Mouse !== false);
         }
     }
 

@@ -602,6 +602,7 @@ def plasma_config(wp: Wallpaper, opts: dict, still: Path | None) -> dict:
         "Volume": int(opts.get("volume", 15)),
         "FullscreenPause": bool(opts.get("fullscreen_pause", True)),
         "PauseOnlyActive": bool(opts.get("pause_only_active", False)),
+        "Mouse": not opts.get("no_mouse", False),
         "Props": json.dumps({k: _typed(v) for k, v in (opts.get("properties") or {}).items()},
                             ensure_ascii=False),
     }

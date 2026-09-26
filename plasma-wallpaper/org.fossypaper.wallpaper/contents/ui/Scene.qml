@@ -13,6 +13,9 @@ Item {
     property string fillMode: "fill"
     property alias props: player.userProperties
     property bool paused: false
+    property bool mouse: true
+
+    onMouseChanged: { player.setAcceptMouse(mouse); player.setAcceptHover(mouse); }
 
     onPausedChanged: paused ? player.pause() : player.play()
     onFillModeChanged: player.fillMode = fillMode === "fit" ? SceneViewer.ASPECTFIT
@@ -24,8 +27,8 @@ Item {
         anchors.fill: parent
         speed: 1.0
         Component.onCompleted: {
-            setAcceptMouse(true);
-            setAcceptHover(true);
+            setAcceptMouse(parent.mouse);
+            setAcceptHover(parent.mouse);
             parent.fillModeChanged();
             if (!parent.paused) play();
         }
