@@ -62,8 +62,30 @@ def cmd_list(a):
     return 0
 
 
+def _resolve(cfg: dict, ref: str) -> tuple[str, str]:
+    """An id, `current`, an exact title, or a piece of one that fits exactly
+    one wallpaper. Returns (id, error)."""
+    ref = (ref or "").strip()
+    if ref in ("", "current", "."):
+        return (cfg.get("current", ""), "" if cfg.get("current") else "nothing applied yet")
+    if engine.find(ref):
+        return ref, ""
+    lib = engine.scan_library()
+    exact = [w for w in lib if w.title.lower() == ref.lower()]
+    hits = exact or [w for w in lib if ref.lower() in w.title.lower()]
+    if len(hits) == 1:
+        return hits[0].id, ""
+    if not hits:
+        return "", f"no wallpaper matches {ref!r}"
+    return "", f"{len(hits)} wallpapers match {ref!r}: " + ", ".join(w.title for w in hits[:5])
+
+
 def cmd_apply(a):
     cfg = config.load()
+    a.id, err = _resolve(cfg, a.id)
+    if err:
+        _emit({"ok": False, "id": "", "message": err}, a.json, lambda: print("! " + err))
+        return 1
     o = config.opts(cfg)
     o["properties"] = cfg.get("properties", {}).get(a.id, {})
     ok, msg = engine.start(a.id, o)
@@ -384,7 +406,7 @@ def build_parser():
                    help="also bake a plain PNG of each preview and report its path")
     s.set_defaults(fn=cmd_list)
 
-    s = sub.add_parser("apply", help="apply a wallpaper"); s.add_argument("id"); s.set_defaults(fn=cmd_apply)
+    s = sub.add_parser("apply", help="apply a wallpaper"); s.add_argument("id", nargs="?", default="current", help="an id, a title or part of one, or `current` (the default)"); s.set_defaults(fn=cmd_apply)
     sub.add_parser("off", help="turn the wallpaper off").set_defaults(fn=cmd_off)
     sub.add_parser("toggle", help="off if running, restore if not").set_defaults(fn=cmd_toggle)
     sub.add_parser("status", help="running state, current, outputs").set_defaults(fn=cmd_status)
