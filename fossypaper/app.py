@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QDockWidget, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStackedWidget,
-    QStatusBar, QTabWidget, QToolBar, QVBoxLayout, QWidget,
+    QStatusBar, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from . import config, engine, properties, sources, theme

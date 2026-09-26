@@ -205,7 +205,8 @@ def cmd_browse(a):
         else:
             rows, last = sources.workshop(a.query, a.page, a.sort or "trend")
     except sources.SourceError as e:
-        _emit({"ok": False, "message": str(e), "rows": []}, a.json, lambda: print("!", e))
+        why = str(e)
+        _emit({"ok": False, "message": why, "rows": []}, a.json, lambda: print("!", why))
         return 1
     out = [{"source": r.source, "id": r.id, "local_id": r.local_id, "title": r.title,
             "meta": r.meta, "kind": r.kind, "thumb": r.thumb_url, "url": r.page_url,
