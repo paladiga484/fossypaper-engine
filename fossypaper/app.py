@@ -784,6 +784,7 @@ class SettingsDialog(QDialog):
             ("Never pause for these app ids", self._line(
                 "pause_ignore_appids", ",".join(cfg.get("pause_ignore_appids") or []),
                 "comma separated, e.g. mpv,vlc")),
+            ("Hide author notices", self._check("hide_author_notices")),
             ("Disable particles", self._check("no_particles")),
             ("Disable parallax", self._check("no_parallax")),
             ("Disable mouse interaction", self._check("no_mouse")),

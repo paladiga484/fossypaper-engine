@@ -602,7 +602,21 @@ def plasma_config(wp: Wallpaper, opts: dict, still: Path | None) -> dict:
         "Volume": int(opts.get("volume", 15)),
         "FullscreenPause": bool(opts.get("fullscreen_pause", True)),
         "PauseOnlyActive": bool(opts.get("pause_only_active", False)),
+        "Props": json.dumps({k: _typed(v) for k, v in (opts.get("properties") or {}).items()},
+                            ensure_ascii=False),
     }
+
+
+def _typed(v):
+    """fossypaper keeps knob values as WE's wire strings; the scene renderer
+    wants JSON types ("true" -> true, "0.5" -> 0.5, colours stay strings)."""
+    s = str(v).strip()
+    if s.lower() in ("true", "false"):
+        return s.lower() == "true"
+    try:
+        return int(s) if re.fullmatch(r"-?\d+", s) else float(s)
+    except ValueError:
+        return s
 
 
 def plasma_script(cfg: dict) -> str:
@@ -647,8 +661,6 @@ def _start_plasma(wp: Wallpaper, opts: dict) -> tuple[bool, str]:
         notes.append("still frame only: " + (
             "no Wallpaper Engine assets folder found" if plasma_scene_module()
             else "no native scene renderer (optional: AUR wallpaper-engine-kde-plugin-git)"))
-    if kind == "scene" and (opts.get("properties") or wp.preset_overrides):
-        notes.append("its custom properties aren't applied on Plasma yet")
     return True, "applied as a Plasma wallpaper" + "".join(" — " + n for n in notes)
 
 
@@ -1045,6 +1057,34 @@ def _per_output(opts: dict) -> list[str]:
 # --------------------------------------------------------------------------- #
 #  Applying
 # --------------------------------------------------------------------------- #
+# Workshop authors ship notices as ordinary bool knobs: a "prompt box" over the
+# art asking you to credit them, or "marketing words". Wallpaper Engine users
+# click them off once; here that default is ours to set.
+_NOTICE_OFF = re.compile(r"prompt\s*box|提示框|author'?s?\s*(notice|note)|作者(提示|公告)", re.I)
+_NOTICE_ON = re.compile(r"hide\s*marketing|关闭.*营销", re.I)
+
+
+def quiet_overrides(wp: Wallpaper) -> dict:
+    """Property values that turn a wallpaper's author notices off."""
+    out = {}
+    for p in list_properties(wp.id):
+        if p.kind != "bool":
+            continue
+        raw = f"{p.key} {p.text}"
+        if _NOTICE_ON.search(raw):
+            out[p.key] = "true"
+        elif _NOTICE_OFF.search(raw):
+            out[p.key] = "false"
+    return out
+
+
+def effective_properties(wp: Wallpaper, opts: dict) -> dict:
+    """Quiet defaults, then the preset's own values, then what the user set by
+    hand for this wallpaper — later wins."""
+    quiet = quiet_overrides(wp) if opts.get("hide_author_notices", True) else {}
+    return {**quiet, **wp.preset_overrides, **(opts.get("properties") or {})}
+
+
 def start(wid: str, opts: dict) -> tuple[bool, str]:
     """Apply a wallpaper through whichever backend can render it."""
     wp = find(wid)
@@ -1063,10 +1103,7 @@ def start(wid: str, opts: dict) -> tuple[bool, str]:
     RENDER_LOG.write_text("")
     _spawned.clear()
     opts = {**opts, "no_audio_processing": not wants_audio(wp, opts)}
-    if wp.preset_overrides:
-        # The preset's own values go first; anything the user set by hand for
-        # this wallpaper wins over them.
-        opts = {**opts, "properties": {**wp.preset_overrides, **(opts.get("properties") or {})}}
+    opts = {**opts, "properties": effective_properties(wp, opts)}
     if h == "plasma":
         return _start_plasma(wp, opts)
     if h == "gnome":

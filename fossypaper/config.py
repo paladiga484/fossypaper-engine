@@ -42,6 +42,7 @@ DEFAULTS = {
     "no_mouse": False,
     # --- battery / games ------------------------------------------------- #
     "fullscreen_pause": True,          # stop rendering behind a fullscreen app
+    "hide_author_notices": True,       # switch off "prompt box" / marketing overlays
     "pause_only_active": False,        # …only when that window has focus
     "pause_ignore_appids": [],
     # --- state ----------------------------------------------------------- #
@@ -66,7 +67,8 @@ DEFAULTS = {
 _RENDER_KEYS = ("output", "span", "layer", "host", "fps", "gpu", "scaling", "clamp", "assets_dir",
                 "silent", "volume", "no_automute", "audio_processing",
                 "no_particles", "no_parallax", "no_mouse",
-                "fullscreen_pause", "pause_only_active", "pause_ignore_appids")
+                "fullscreen_pause", "pause_only_active", "pause_ignore_appids",
+                "hide_author_notices")
 
 
 def load() -> dict:

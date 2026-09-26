@@ -18,5 +18,7 @@
     <entry name="Volume" type="Int"><default>15</default></entry>
     <entry name="FullscreenPause" type="Bool"><default>true</default></entry>
     <entry name="PauseOnlyActive" type="Bool"><default>false</default></entry>
+    <!-- the scene's own knobs, as a JSON object {"key": value} -->
+    <entry name="Props" type="String"><default>{}</default></entry>
   </group>
 </kcfg>

@@ -11,6 +11,7 @@ Item {
     property alias muted: player.muted
     property alias volume: player.volume
     property string fillMode: "fill"
+    property alias props: player.userProperties
     property bool paused: false
 
     onPausedChanged: paused ? player.pause() : player.play()

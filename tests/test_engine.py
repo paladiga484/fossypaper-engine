@@ -242,6 +242,29 @@ class LibraryTest(unittest.TestCase):
         self.assertTrue(ok, msg)
 
 
+class NoticeTest(unittest.TestCase):
+    def test_prompt_boxes_go_off_and_marketing_gets_hidden(self):
+        from unittest.mock import patch
+        props = [properties.Property("promptbox", "bool", "🔘提示框 prompt box", "true"),
+                 properties.Property("brhidemarketingwords", "bool", "Hide marketing words", "false"),
+                 properties.Property("rain", "bool", "Rain", "true"),
+                 properties.Property("theme", "combo", "Prompt box colour", "1")]
+        wp = engine.Wallpaper("9", "t", "scene", False, None, Path("/nonexistent"))
+        with patch.object(engine, "list_properties", return_value=props):
+            self.assertEqual(engine.quiet_overrides(wp),
+                             {"promptbox": "false", "brhidemarketingwords": "true"})
+            # what the user set by hand still wins, and the switch turns it all off
+            self.assertEqual(engine.effective_properties(wp, {"properties": {"promptbox": "true"}})
+                             ["promptbox"], "true")
+            self.assertEqual(engine.effective_properties(wp, {"hide_author_notices": False}), {})
+
+    def test_plasma_gets_typed_props(self):
+        self.assertIs(engine._typed("true"), True)
+        self.assertEqual(engine._typed("0.5"), 0.5)
+        self.assertEqual(engine._typed("3"), 3)
+        self.assertEqual(engine._typed("1 0.5 0"), "1 0.5 0")
+
+
 class ArgvTest(unittest.TestCase):
     def base(self, **over):
         return {**config.opts(dict(config.DEFAULTS)), "output": "eDP-1", **over}

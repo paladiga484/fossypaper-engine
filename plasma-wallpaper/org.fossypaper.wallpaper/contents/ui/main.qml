@@ -108,6 +108,7 @@ WallpaperItem {
             item.volume = Qt.binding(() => root.cfg.Volume / 100.0);
             item.fillMode = Qt.binding(() => root.cfg.Fit);
             item.paused = Qt.binding(() => root.paused);
+            item.props = Qt.binding(() => root.cfg.Props || "{}");
         }
     }
 
