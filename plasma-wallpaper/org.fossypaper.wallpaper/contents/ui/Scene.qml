@@ -14,6 +14,9 @@ Item {
     property alias props: player.userProperties
     property bool paused: false
     property bool mouse: true
+    // off unless fossypaper says this scene has no effect chain: the
+    // renderer's static-pass cache feeds effects their own previous frame
+    property alias cachePasses: player.cachePasses
 
     onMouseChanged: { player.setAcceptMouse(mouse); player.setAcceptHover(mouse); }
 
@@ -26,6 +29,7 @@ Item {
         id: player
         anchors.fill: parent
         speed: 1.0
+        cachePasses: false
         Component.onCompleted: {
             setAcceptMouse(parent.mouse);
             setAcceptHover(parent.mouse);

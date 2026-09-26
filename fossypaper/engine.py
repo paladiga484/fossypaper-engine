@@ -676,6 +676,41 @@ def _pkg_entries(pkg: Path) -> list[tuple[str, int, int]]:
     return [(n, base + o, sz) for n, o, sz in out]
 
 
+def scene_has_effects(wp: Wallpaper) -> bool:
+    """Does any layer of this scene run an effect chain?
+
+    The Plasma scene renderer caches "static" passes (9754ea4, "cache static
+    render passes"). A layer's base image counts as static, but it is cached
+    in the effect chain's ping-pong buffer, which the next effect overwrites.
+    From the second frame on, the chain starts from its own previous output,
+    so every shake/wave compounds forever and the picture melts into smears.
+    Scenes with effects have to run with that cache off."""
+    rw = find(wp.render_id) or wp
+    pkg = rw.entry
+    try:
+        if pkg is not None and pkg.suffix.lower() == ".pkg":
+            ent = {n: (o, sz) for n, o, sz in _pkg_entries(pkg)}
+            name = next((n for n in ent if n == "scene.json"), None) or \
+                next((n for n in ent if n.endswith(".json") and "/" not in n
+                      and n != "project.json"), None)
+            if name is None:
+                return True
+            with open(pkg, "rb") as f:
+                f.seek(ent[name][0])
+                scene = json.loads(f.read(ent[name][1]).decode("utf-8", "replace"))
+        elif pkg is not None:
+            scene = json.loads(pkg.with_suffix(".json").read_text(errors="replace"))
+        else:
+            return True
+    except (OSError, ValueError, StopIteration, KeyError, __import__("struct").error):
+        return True          # unknown: take the safe (uncached) path
+    for obj in scene.get("objects") or []:
+        for eff in (obj.get("effects") or []) if isinstance(obj, dict) else []:
+            if isinstance(eff, dict) and eff.get("visible", True) is not False:
+                return True
+    return False
+
+
 def scene_video(wp: Wallpaper) -> Path | None:
     """The MP4 inside a scene's biggest video texture, extracted to the cache.
 
@@ -742,6 +777,9 @@ def plasma_config(wp: Wallpaper, opts: dict, still: Path | None,
         "FullscreenPause": bool(opts.get("fullscreen_pause", True)),
         "PauseOnlyActive": bool(opts.get("pause_only_active", False)),
         "Mouse": not opts.get("no_mouse", False),
+        # the renderer's static-pass cache feeds effect chains their own last
+        # frame (see scene_has_effects); keep it only where there's no chain
+        "CachePasses": kind_of(wp) == "scene" and not video and not scene_has_effects(wp),
         "Props": json.dumps({k: _typed(v) for k, v in (opts.get("properties") or {}).items()},
                             ensure_ascii=False),
     }

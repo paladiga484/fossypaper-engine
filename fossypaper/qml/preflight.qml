@@ -16,6 +16,7 @@ Window {
         source: a[a.length - 2]
         assets: a[a.length - 1]
         fps: 30; muted: true
+        cachePasses: false      // as the wallpaper runs any scene with effects
         Component.onCompleted: play()
     }
     Timer { interval: 6000; running: true; onTriggered: Qt.quit() }

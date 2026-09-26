@@ -679,5 +679,40 @@ class HostTest(unittest.TestCase):
             self.assertIn(("org.gnome.desktop.background", "picture-uri", "'file:///old.png'"), sets)
 
 
+class SceneEffectsTest(unittest.TestCase):
+    """The Plasma renderer's static-pass cache melts scenes with effect chains
+    (each frame's effects run on the previous frame), so those run uncached."""
+
+    def pkg(self, root: Path, scene: dict) -> Path:
+        import struct
+        d = root / "5150"
+        d.mkdir(parents=True, exist_ok=True)
+        files = {"scene.json": json.dumps(scene).encode(), "models/a.json": b"{}"}
+        head, body = [b"PKGV0001"], b""
+        idx = b""
+        for name, data in files.items():
+            n = name.encode()
+            idx += struct.pack("<I", len(n)) + n + struct.pack("<II", len(body), len(data))
+            body += data
+        blob = struct.pack("<I", 8) + head[0] + struct.pack("<I", len(files)) + idx + body
+        (d / "scene.pkg").write_bytes(blob)
+        (d / "project.json").write_text(json.dumps({"title": "t", "type": "scene", "file": "scene.json"}))
+        return d
+
+    def test_effects_turn_the_cache_off(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = [({"objects": [{"image": "a", "effects": [{"file": "effects/shake/effect.json"}]}]}, True),
+                     ({"objects": [{"image": "a", "effects": [{"file": "x", "visible": False}]}]}, False),
+                     ({"objects": [{"image": "a"}]}, False)]
+            for scene, want in cases:
+                with self.subTest(scene=scene):
+                    import shutil
+                    shutil.rmtree(root / "5150", ignore_errors=True)
+                    wp = engine.read_wallpaper(self.pkg(root, scene))
+                    self.assertEqual(engine.scene_has_effects(wp), want)
+                    self.assertEqual(engine.plasma_config(wp, {}, None)["CachePasses"], not want)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

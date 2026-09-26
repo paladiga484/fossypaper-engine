@@ -110,6 +110,8 @@ WallpaperItem {
         onStatusChanged: if (status === Loader.Error)
             console.warn("fossypaper: no native scene renderer; showing the still frame")
         onLoaded: {
+            // before the source: flipping it later reloads the whole scene
+            item.cachePasses = Qt.binding(() => root.cfg.CachePasses === true);
             item.source = scene.loadedFor;
             item.assets = Qt.binding(() => root.cfg.Assets);
             item.fps = Qt.binding(() => root.cfg.Fps);
