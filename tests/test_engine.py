@@ -308,6 +308,16 @@ class SceneVideoTest(unittest.TestCase):
 
 
 class ArgvTest(unittest.TestCase):
+    def setUp(self):
+        # the machine's own screens (a CI runner has Virtual-1) must not
+        # decide which output the argv names
+        from unittest.mock import patch
+        self._outs = patch.object(engine.session, "outputs", return_value=["eDP-1"])
+        self._outs.start()
+
+    def tearDown(self):
+        self._outs.stop()
+
     def base(self, **over):
         return {**config.opts(dict(config.DEFAULTS)), "output": "eDP-1", **over}
 
