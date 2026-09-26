@@ -1,0 +1,16 @@
+post_install() {
+  cat <<'MSG'
+fossypaper-engine:
+  fossypaper doctor     what's installed here, and what each piece buys you
+  fossypaper            the app      lazypaper   the terminal side
+
+  Plasma: pick "fossypaper" as the wallpaper type, or just `fossypaper apply <id>`.
+          Restart plasmashell once if it was running during the install.
+  Noctalia plugin (optional, per user):
+          cp -r /usr/share/fossypaper/noctalia-plugin ~/.local/share/noctalia/plugins/fossypaper
+MSG
+}
+
+post_upgrade() {
+  echo "fossypaper-engine: restart plasmashell to load an updated Plasma wallpaper (systemctl --user restart plasma-plasmashell)"
+}

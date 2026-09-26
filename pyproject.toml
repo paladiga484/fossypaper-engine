@@ -1,16 +1,21 @@
 [project]
 name = "fossypaper-engine"
 version = "0.3.0"
-description = "A wallpaper manager for Wayland — Wallpaper Engine scenes, video and stills, with a browser and per-wallpaper controls."
+description = "A FOSS Wallpaper Engine manager for Linux — scenes, video and stills as a real wallpaper on Hyprland, niri, sway, KDE Plasma, GNOME and X11."
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = ["PySide6", "Pillow"]
 
+[project.urls]
+Homepage = "https://github.com/paladiga484/fossypaper-engine"
+
 [project.scripts]
 fossypaper = "fossypaper.cli:main"
-lazypaper = "fossypaper.tui:main"
+lazypaper = "fossypaper.tui:entry"
 
-[tool.setuptools]
-packages = ["fossypaper", "fossypaper.engine"]
+[tool.setuptools.packages.find]
+include = ["fossypaper*"]
 
 [tool.setuptools.package-data]
 fossypaper = ["qml/*.qml"]

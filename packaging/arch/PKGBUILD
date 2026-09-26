@@ -1,0 +1,64 @@
+# Maintainer: paladiga484 <142195960+paladiga484@users.noreply.github.com>
+#
+# Builds from a git tag, not a moving branch. Bump pkgver and the
+# tag together; `updpkgsums` is a no-op for git sources (they're pinned by
+# the tag itself).
+pkgname=fossypaper-engine
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="FOSS Wallpaper Engine manager: scenes, video and stills as a real wallpaper on Hyprland, niri, sway, Plasma, GNOME and X11"
+arch=('any')
+url="https://github.com/paladiga484/fossypaper-engine"
+license=('MIT')
+depends=('python' 'pyside6' 'python-pillow')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=(
+  'linux-wallpaperengine-git: Wallpaper Engine scenes on layer-shell compositors and X11'
+  'mpvpaper: video wallpapers on layer-shell compositors'
+  'swww: still images on layer-shell compositors (mpvpaper covers them otherwise)'
+  'wallpaper-engine-kde-plugin-git: live scenes on KDE Plasma (fossypaper loads only its SceneViewer)'
+  'qt6-multimedia: video wallpapers on KDE Plasma'
+  'qt6-tools: qdbus6, to set the wallpaper on KDE Plasma'
+  'ffmpeg: palette extraction and still frames from video wallpapers'
+  'steamcmd: downloading Workshop items from inside the app'
+  'xwallpaper: still images on bare X11 window managers'
+  'xwinwrap: video wallpapers on bare X11 window managers'
+)
+install=fossypaper-engine.install
+source=("$pkgname::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname"
+  # the suite pins itself to the layer-shell host and builds its own fixtures
+  HOME="$srcdir/home" python -m unittest discover -s tests
+}
+
+package() {
+  cd "$pkgname"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  install -Dm644 data/fossypaper.desktop "$pkgdir/usr/share/applications/fossypaper.desktop"
+  install -Dm644 data/lazypaper.desktop  "$pkgdir/usr/share/applications/lazypaper.desktop"
+  install -Dm644 data/fossypaper.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/fossypaper.svg"
+  install -Dm644 data/lazypaper.svg  "$pkgdir/usr/share/icons/hicolor/scalable/apps/lazypaper.svg"
+
+  # Plasma finds wallpaper types here on its own
+  install -d "$pkgdir/usr/share/plasma/wallpapers"
+  cp -r --no-preserve=ownership plasma-wallpaper/org.fossypaper.wallpaper \
+    "$pkgdir/usr/share/plasma/wallpapers/org.fossypaper.wallpaper"
+
+  # Noctalia only loads user plugins; staged here for fossypaper-engine.install to point at
+  install -d "$pkgdir/usr/share/fossypaper"
+  cp -r --no-preserve=ownership noctalia-plugin/fossypaper "$pkgdir/usr/share/fossypaper/noctalia-plugin"
+
+  install -Dm644 docs/PRIVACY.md -t "$pkgdir/usr/share/doc/fossypaper"
+  install -Dm644 docs/TERMS.md   -t "$pkgdir/usr/share/doc/fossypaper"
+  install -Dm644 README.md       -t "$pkgdir/usr/share/doc/fossypaper"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

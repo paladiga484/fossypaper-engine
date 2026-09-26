@@ -903,5 +903,17 @@ def main():
     return 0
 
 
+def entry() -> int:
+    """The `lazypaper` console script: the desktop entry runs `lazypaper
+    --window`, so a packaged install has to understand it too."""
+    import sys
+    args = sys.argv[1:]
+    if args in (["-h"], ["--help"]):
+        print("usage: lazypaper [--window]\n\n"
+              "  --window   open in its own terminal window (app-id 'lazypaper')")
+        return 0
+    return open_window() if "--window" in args else main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entry())
