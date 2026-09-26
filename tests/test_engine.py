@@ -202,11 +202,11 @@ class LibraryTest(unittest.TestCase):
         be the dependency's, carrying the preset's own overrides — not the
         preset's own (assetless) id."""
         from unittest.mock import patch
-        with patch.object(engine, "have_renderer", return_value=True), \
-             patch.object(engine, "stop"), \
-             patch.object(engine, "STATE", self.root), \
-             patch.object(engine, "RENDER_LOG", self.root / "renderer.log"), \
-             patch.object(engine, "_spawn") as spawn:
+        with patch.object(engine.tools, "have_renderer", return_value=True), \
+             patch.object(engine.render, "stop"), \
+             patch.object(engine.tools, "STATE", self.root), \
+             patch.object(engine.render, "RENDER_LOG", self.root / "renderer.log"), \
+             patch.object(engine.render, "_spawn") as spawn:
             ok, msg = engine.start("1009", config.opts(dict(config.DEFAULTS)))
         self.assertTrue(ok, msg)
         argv = spawn.call_args[0][0]
@@ -219,11 +219,11 @@ class LibraryTest(unittest.TestCase):
         has to come back as a failure that quotes its own last words."""
         from unittest.mock import patch
         fake = [sys.executable, "-c", "import sys; print('no GL context for you'); sys.exit(3)"]
-        with patch.object(engine, "have_renderer", return_value=True), \
-             patch.object(engine, "stop"), \
-             patch.object(engine, "STATE", self.root), \
-             patch.object(engine, "RENDER_LOG", self.root / "renderer.log"), \
-             patch.object(engine, "build_argv", return_value=fake):
+        with patch.object(engine.tools, "have_renderer", return_value=True), \
+             patch.object(engine.render, "stop"), \
+             patch.object(engine.tools, "STATE", self.root), \
+             patch.object(engine.render, "RENDER_LOG", self.root / "renderer.log"), \
+             patch.object(engine.render, "build_argv", return_value=fake):
             ok, msg = engine.start("1001", config.opts(dict(config.DEFAULTS)))
         self.assertFalse(ok)
         self.assertIn("no GL context for you", msg)
@@ -231,11 +231,11 @@ class LibraryTest(unittest.TestCase):
     def test_a_renderer_that_stays_up_is_applied(self):
         from unittest.mock import patch
         fake = [sys.executable, "-c", "import time; time.sleep(5)"]
-        with patch.object(engine, "have_renderer", return_value=True), \
-             patch.object(engine, "stop"), \
-             patch.object(engine, "STATE", self.root), \
-             patch.object(engine, "RENDER_LOG", self.root / "renderer.log"), \
-             patch.object(engine, "build_argv", return_value=fake):
+        with patch.object(engine.tools, "have_renderer", return_value=True), \
+             patch.object(engine.render, "stop"), \
+             patch.object(engine.tools, "STATE", self.root), \
+             patch.object(engine.render, "RENDER_LOG", self.root / "renderer.log"), \
+             patch.object(engine.render, "build_argv", return_value=fake):
             ok, msg = engine.start("1001", {**config.opts(dict(config.DEFAULTS)), "verify_grace": 0.4})
         for proc in engine._spawned:
             proc.kill(); proc.wait()
@@ -250,7 +250,7 @@ class NoticeTest(unittest.TestCase):
                  properties.Property("rain", "bool", "Rain", "true"),
                  properties.Property("theme", "combo", "Prompt box colour", "1")]
         wp = engine.Wallpaper("9", "t", "scene", False, None, Path("/nonexistent"))
-        with patch.object(engine, "list_properties", return_value=props):
+        with patch.object(engine.library, "list_properties", return_value=props):
             self.assertEqual(engine.quiet_overrides(wp),
                              {"promptbox": "false", "brhidemarketingwords": "true"})
             # what the user set by hand still wins, and the switch turns it all off
@@ -274,10 +274,10 @@ class PreflightTest(unittest.TestCase):
         wp = engine.Wallpaper("5", "t", "scene", False, None, d, entry=pkg)
         key = f"5:{int(pkg.stat().st_mtime)}:{{}}"
         (d / "pf.json").write_text(json.dumps({key: {"ok": False, "why": "hangs"}}))
-        with patch.object(engine, "_PREFLIGHT", d / "pf.json"), \
-             patch.object(engine, "find", return_value=wp), \
-             patch.object(engine, "which", return_value="/bin/true"), \
-             patch.object(engine.subprocess, "Popen", side_effect=AssertionError("spawned")):
+        with patch.object(engine.plasma, "_PREFLIGHT", d / "pf.json"), \
+             patch.object(engine.library, "find", return_value=wp), \
+             patch.object(engine.tools, "which", return_value="/bin/true"), \
+             patch.object(engine.plasma.subprocess, "Popen", side_effect=AssertionError("spawned")):
             self.assertEqual(engine.plasma_preflight(wp, {}), (False, "hangs"))
         tmp.cleanup()
 
@@ -291,8 +291,6 @@ class SceneVideoTest(unittest.TestCase):
         mp4 = b"\x00\x00\x00\x18ftypisom" + b"V" * 70000
         tex = b"TEXV0005\x00TEXI0001" + b"\x00" * 60 + struct.pack("<I", len(mp4)) + mp4 + b"TRAIL"
         files = [("scene.json", b"{}"), ("materials/clip.tex", tex)]
-        head = b"".join(struct.pack("<I", len(n)) + n.encode() + struct.pack("<II", 0, 0)
-                        for n, _ in files)
         body, entries, off = b"", b"", 0
         for n, data in files:
             entries += struct.pack("<I", len(n)) + n.encode() + struct.pack("<II", off, len(data))
@@ -301,8 +299,8 @@ class SceneVideoTest(unittest.TestCase):
         pkg.write_bytes(struct.pack("<I", 8) + b"PKGV0022" + struct.pack("<I", len(files))
                         + entries + body)
         wp = engine.Wallpaper("77", "t", "scene", True, None, d, entry=pkg)
-        with patch.object(engine, "SCENE_VIDEOS", d / "out"), \
-             patch.object(engine, "find", return_value=wp):
+        with patch.object(engine.library, "SCENE_VIDEOS", d / "out"), \
+             patch.object(engine.library, "find", return_value=wp):
             out = engine.scene_video(wp)
         self.assertIsNotNone(out)
         self.assertEqual(out.read_bytes(), mp4)
@@ -589,9 +587,9 @@ class HostTest(unittest.TestCase):
             self.assertEqual(engine.host({"host": "nonsense"}), "gnome")
 
     def test_auto_layer_steps_over_a_shell_backdrop(self):
-        with self.patch.object(engine, "backdrop_shell", return_value=""):
+        with self.patch.object(engine.session, "backdrop_shell", return_value=""):
             self.assertEqual(engine.resolved_layer({"layer": "auto"}), "background")
-        with self.patch.object(engine, "backdrop_shell", return_value="qs"):
+        with self.patch.object(engine.session, "backdrop_shell", return_value="qs"):
             self.assertEqual(engine.resolved_layer({"layer": "auto"}), "bottom")
             self.assertEqual(engine.resolved_layer({"layer": "top"}), "top")
 
@@ -600,7 +598,7 @@ class HostTest(unittest.TestCase):
                             ({"hyprpaper"}, "hyprpaper"), ({"bash", "kitty"}, "")):
             engine._backdrop_cache[:] = [0.0, ""]
             with self.subTest(comms=comms), \
-                 self.patch.object(engine, "_running_comms", return_value=comms):
+                 self.patch.object(engine.session, "_running_comms", return_value=comms):
                 self.assertEqual(engine.backdrop_shell(), want)
         engine._backdrop_cache[:] = [0.0, ""]
 
@@ -609,16 +607,16 @@ class HostTest(unittest.TestCase):
         apply call into plasmashell (or D-Bus-activate it)."""
         prev = self.root / "plasma-previous.json"
         prev.write_text('{"1": "org.kde.image"}')
-        with self.patch.object(engine, "_PLASMA_PREV", prev), \
-             self.patch.object(engine, "_bus_has", return_value=False), \
-             self.patch.object(engine, "plasma_eval") as ev:
+        with self.patch.object(engine.plasma, "_PLASMA_PREV", prev), \
+             self.patch.object(engine.plasma, "_bus_has", return_value=False), \
+             self.patch.object(engine.plasma, "plasma_eval") as ev:
             engine._plasma_restore()
         ev.assert_not_called()
         self.assertTrue(prev.is_file())          # kept for the next Plasma login
 
     def test_argv_carries_the_resolved_layer_and_none_on_x11(self):
         o = {**config.opts(dict(config.DEFAULTS)), "output": "eDP-1"}
-        with self.patch.object(engine, "backdrop_shell", return_value=""):
+        with self.patch.object(engine.session, "backdrop_shell", return_value=""):
             argv = engine.build_argv("42", {**o, "host": "layer"})
             self.assertEqual(argv[argv.index("--layer") + 1], "background")
             self.assertNotIn("--layer", engine.build_argv("42", {**o, "host": "x11"}))
@@ -632,7 +630,7 @@ class HostTest(unittest.TestCase):
 
     def test_plasma_and_gnome_draw_it_themselves(self):
         wp = self.make_wp("clip.mp4", "video")
-        with self.patch.object(engine, "which", return_value=None):
+        with self.patch.object(engine.tools, "which", return_value=None):
             with self.env(FOSSYPAPER_HOST="layer"):
                 self.assertFalse(engine.backend_for(wp)[1])      # needs mpvpaper
             for h in ("plasma", "gnome"):
@@ -656,11 +654,11 @@ class HostTest(unittest.TestCase):
         def fake_eval(script):
             calls.append(script)
             return True, '{"1": "org.kde.image"}' if "writeConfig" in script else ""
-        with self.patch.object(engine, "_PLASMA_PREV", prev), \
-             self.patch.object(engine, "STATE", self.root), \
-             self.patch.object(engine, "plasma_plugin_installed", return_value=True), \
-             self.patch.object(engine, "_bus_has", return_value=True), \
-             self.patch.object(engine, "plasma_eval", side_effect=fake_eval):
+        with self.patch.object(engine.plasma, "_PLASMA_PREV", prev), \
+             self.patch.object(engine.tools, "STATE", self.root), \
+             self.patch.object(engine.plasma, "plasma_plugin_installed", return_value=True), \
+             self.patch.object(engine.plasma, "_bus_has", return_value=True), \
+             self.patch.object(engine.plasma, "plasma_eval", side_effect=fake_eval):
             ok, msg = engine._start_plasma(wp, {})
             self.assertTrue(ok, msg)
             self.assertEqual(json.loads(prev.read_text()), {"1": "org.kde.image"})
@@ -672,9 +670,9 @@ class HostTest(unittest.TestCase):
 
     def test_plasma_refusal_is_reported(self):
         wp = self.make_wp("pic.png", "image")
-        with self.patch.object(engine, "_PLASMA_PREV", self.root / "p.json"), \
-             self.patch.object(engine, "plasma_plugin_installed", return_value=True), \
-             self.patch.object(engine, "plasma_eval", return_value=(False, "Widgets are locked")):
+        with self.patch.object(engine.plasma, "_PLASMA_PREV", self.root / "p.json"), \
+             self.patch.object(engine.plasma, "plasma_plugin_installed", return_value=True), \
+             self.patch.object(engine.plasma, "plasma_eval", return_value=(False, "Widgets are locked")):
             ok, msg = engine._start_plasma(wp, {})
         self.assertFalse(ok)
         self.assertIn("Widgets are locked", msg)
@@ -689,9 +687,9 @@ class HostTest(unittest.TestCase):
             if args[0] == "set":
                 sets.append(args[1:])
             return True, ""
-        with self.patch.object(engine, "_GNOME_PREV", self.root / "g.json"), \
-             self.patch.object(engine, "STATE", self.root), \
-             self.patch.object(engine, "_gsettings", side_effect=fake):
+        with self.patch.object(engine.gnome, "_GNOME_PREV", self.root / "g.json"), \
+             self.patch.object(engine.tools, "STATE", self.root), \
+             self.patch.object(engine.gnome, "_gsettings", side_effect=fake):
             ok, msg = engine._start_gnome(wp, {})
             self.assertTrue(ok, msg)
             keys = {k for _schema, k, _v in sets}

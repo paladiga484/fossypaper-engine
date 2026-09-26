@@ -10,7 +10,7 @@ fossypaper = "fossypaper.cli:main"
 lazypaper = "fossypaper.tui:main"
 
 [tool.setuptools]
-packages = ["fossypaper"]
+packages = ["fossypaper", "fossypaper.engine"]
 
 [tool.setuptools.package-data]
 fossypaper = ["qml/*.qml"]
