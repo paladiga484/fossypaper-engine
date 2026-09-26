@@ -100,12 +100,17 @@ WallpaperItem {
     Loader {
         id: scene
         anchors.fill: parent
+        // `loadedFor` pins the item to one scene: SceneViewer keeps drawing the
+        // old scene when only its source changes, so a new scene gets a fresh
+        // renderer (the Loader drops and rebuilds the item).
+        property string loadedFor: ""
         active: root.kind === "scene" && root.sourceUrl !== "" && root.cfg.Assets !== ""
+                && loadedFor === root.sourceUrl
         source: active ? "Scene.qml" : ""
         onStatusChanged: if (status === Loader.Error)
             console.warn("fossypaper: no native scene renderer; showing the still frame")
         onLoaded: {
-            item.source = Qt.binding(() => root.sourceUrl);
+            item.source = scene.loadedFor;
             item.assets = Qt.binding(() => root.cfg.Assets);
             item.fps = Qt.binding(() => root.cfg.Fps);
             item.muted = Qt.binding(() => root.cfg.Muted);
@@ -116,6 +121,13 @@ WallpaperItem {
             item.mouse = Qt.binding(() => root.cfg.Mouse !== false);
         }
     }
+
+    // swap scenes by tearing the renderer down first, then building it anew
+    onSourceUrlChanged: {
+        scene.loadedFor = "";
+        Qt.callLater(() => scene.loadedFor = root.sourceUrl);
+    }
+    Component.onCompleted: scene.loadedFor = root.sourceUrl
 
     // -- what counts as "something is covering me" --------------------------- //
     TaskManager.VirtualDesktopInfo { id: desktops }
