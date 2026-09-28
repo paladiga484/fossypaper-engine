@@ -12,21 +12,33 @@ from . import media, tools
 #  Theme sync — palette out to shells/compositors
 # --------------------------------------------------------------------------- #
 def theme_backends() -> list[str]:
-    return ["builtin"] + [t for t in ("matugen", "wallust", "wal", "caelestia") if tools.which(t)]
+    shells = ["shells"] if tools.which("caelestia") or tools.which("noctalia") else []
+    return ["builtin"] + [t for t in ("matugen", "wallust", "wal") if tools.which(t)] + shells
 
 
-def _caelestia(frame: Path, wid: str) -> subprocess.CompletedProcess:
-    """Hand the frame to Caelestia as its wallpaper under the `dynamic` scheme,
-    so the shell derives its Material You colours from it. The frame is copied
-    per wallpaper id: Caelestia keeps a link to the path, and current-frame.png
-    is rewritten on every sync."""
-    still = tools.STATE / "caelestia" / f"{wid}.png"
+def _shells(frame: Path, wid: str) -> subprocess.CompletedProcess:
+    """Hand the frame to the desktop shells as their wallpaper, so each derives
+    its own colours from it. Caelestia is switched to its `dynamic` scheme and
+    is fed even when it isn't running (its CLI writes the state the shell reads
+    on start); Noctalia only takes it over IPC, so only while it's up. The
+    frame is copied per wallpaper id: both keep the path, and
+    current-frame.png is rewritten on every sync."""
+    still = tools.STATE / "shells" / f"{wid}.png"
     still.parent.mkdir(parents=True, exist_ok=True)
     still.write_bytes(frame.read_bytes())
-    subprocess.run(["caelestia", "scheme", "set", "-n", "dynamic"],
-                   capture_output=True, text=True, timeout=30)
-    return subprocess.run(["caelestia", "wallpaper", "-f", str(still)],
-                          capture_output=True, text=True, timeout=60)
+    r = subprocess.CompletedProcess([], 0, "", "")
+    if tools.which("caelestia"):
+        subprocess.run(["caelestia", "scheme", "set", "-n", "dynamic"],
+                       capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["caelestia", "wallpaper", "-f", str(still)],
+                           capture_output=True, text=True, timeout=60)
+    if tools.which("noctalia") and subprocess.run(
+            ["pgrep", "-x", "noctalia"], capture_output=True).returncode == 0:
+        n = subprocess.run(["noctalia", "msg", "wallpaper-set", str(still)],
+                           capture_output=True, text=True, timeout=30)
+        if n.returncode != 0:
+            r = n
+    return r
 
 
 def sync_theme(wid: str, opts: dict, backend: str = "builtin") -> tuple[bool, str]:
@@ -47,7 +59,7 @@ def sync_theme(wid: str, opts: dict, backend: str = "builtin") -> tuple[bool, st
             "wallust": ["wallust", "run", str(frame)],
             "wal": ["wal", "-i", str(frame), "-n"]}
     try:
-        r = (_caelestia(frame, wid) if backend == "caelestia" else
+        r = (_shells(frame, wid) if backend == "shells" else
              subprocess.run(cmds[backend], capture_output=True, text=True, timeout=90))
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"theme sync error: {e}"
