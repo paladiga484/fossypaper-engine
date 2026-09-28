@@ -15,6 +15,7 @@ from __future__ import annotations
 import curses
 import os
 import textwrap
+import threading
 import unicodedata
 
 # ncurses waits a full second after ESC to see whether an escape *sequence* is
@@ -543,6 +544,17 @@ def _apply(st, wid):
         config.save(st.cfg)
     st.running = ok or engine.is_running()
     st.status = ("" if ok else "! ") + msg
+    if ok and st.cfg.get("theme_on_apply"):
+        # Rendering a scene frame can take a while; theme off the input loop
+        # (it redraws every 2s, so the result shows up on its own).
+        threading.Thread(target=_theme_bg, args=(st, wid, o), daemon=True).start()
+
+
+def _theme_bg(st, wid, opts):
+    ok, msg = engine.sync_theme(wid, opts, st.cfg.get("theme_backend", "builtin"))
+    st.palette = engine.palette()
+    if not ok:
+        st.status = "! " + msg
 
 
 def _cycle(st, key, cycle, label):

@@ -12,7 +12,21 @@ from . import media, tools
 #  Theme sync — palette out to shells/compositors
 # --------------------------------------------------------------------------- #
 def theme_backends() -> list[str]:
-    return ["builtin"] + [t for t in ("matugen", "wallust", "wal") if tools.which(t)]
+    return ["builtin"] + [t for t in ("matugen", "wallust", "wal", "caelestia") if tools.which(t)]
+
+
+def _caelestia(frame: Path, wid: str) -> subprocess.CompletedProcess:
+    """Hand the frame to Caelestia as its wallpaper under the `dynamic` scheme,
+    so the shell derives its Material You colours from it. The frame is copied
+    per wallpaper id: Caelestia keeps a link to the path, and current-frame.png
+    is rewritten on every sync."""
+    still = tools.STATE / "caelestia" / f"{wid}.png"
+    still.parent.mkdir(parents=True, exist_ok=True)
+    still.write_bytes(frame.read_bytes())
+    subprocess.run(["caelestia", "scheme", "set", "-n", "dynamic"],
+                   capture_output=True, text=True, timeout=30)
+    return subprocess.run(["caelestia", "wallpaper", "-f", str(still)],
+                          capture_output=True, text=True, timeout=60)
 
 
 def sync_theme(wid: str, opts: dict, backend: str = "builtin") -> tuple[bool, str]:
@@ -33,7 +47,8 @@ def sync_theme(wid: str, opts: dict, backend: str = "builtin") -> tuple[bool, st
             "wallust": ["wallust", "run", str(frame)],
             "wal": ["wal", "-i", str(frame), "-n"]}
     try:
-        r = subprocess.run(cmds[backend], capture_output=True, text=True, timeout=90)
+        r = (_caelestia(frame, wid) if backend == "caelestia" else
+             subprocess.run(cmds[backend], capture_output=True, text=True, timeout=90))
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"theme sync error: {e}"
     if r.returncode != 0:
