@@ -533,6 +533,10 @@ def _draw(scr, st):
 # --------------------------------------------------------------------------- #
 def _apply(st, wid):
     w = next((x for x in st.lib if x.id == wid), None)
+    # Every change made in here is saved as it happens, so the file is at least
+    # as new as st.cfg. Re-read it so a `fossypaper config --set` made while
+    # lazypaper was open isn't overwritten by the save below.
+    st.cfg = config.load()
     st.status = f"starting {w.title if w else wid}..."
     if st.scr is not None:
         _draw(st.scr, st)             # start() waits to see the renderer live
