@@ -11,17 +11,28 @@ from . import media, tools
 # --------------------------------------------------------------------------- #
 #  Theme sync — palette out to shells/compositors
 # --------------------------------------------------------------------------- #
+SERP_QML = Path.home() / ".local/share/serpantinum/src/quickshell/Shell.qml"
+
+
 def theme_backends() -> list[str]:
-    shells = ["shells"] if tools.which("caelestia") or tools.which("noctalia") else []
+    shells = (["shells"] if tools.which("caelestia") or tools.which("noctalia")
+              or SERP_QML.is_file() else [])
     return ["builtin"] + [t for t in ("matugen", "wallust", "wal") if tools.which(t)] + shells
+
+
+def _serpantinum_up() -> bool:
+    return SERP_QML.is_file() and subprocess.run(
+        ["pgrep", "-f", f"quickshell.*{SERP_QML.parent}"],
+        capture_output=True).returncode == 0
 
 
 def _shells(frame: Path, wid: str) -> subprocess.CompletedProcess:
     """Hand the frame to the desktop shells as their wallpaper, so each derives
     its own colours from it. Caelestia is switched to its `dynamic` scheme and
     is fed even when it isn't running (its CLI writes the state the shell reads
-    on start); Noctalia only takes it over IPC, so only while it's up. The
-    frame is copied per wallpaper id: both keep the path, and
+    on start); Noctalia and Serpantinum only take it over IPC, so only while
+    they're up (Serpantinum's matugen run also rewrites its kitty colours).
+    The frame is copied per wallpaper id: the shells keep the path, and
     current-frame.png is rewritten on every sync."""
     still = tools.STATE / "shells" / f"{wid}.png"
     still.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +49,12 @@ def _shells(frame: Path, wid: str) -> subprocess.CompletedProcess:
                            capture_output=True, text=True, timeout=30)
         if n.returncode != 0:
             r = n
+    if _serpantinum_up():
+        s = subprocess.run(["qs", "ipc", "-p", str(SERP_QML), "call", "wallpaper",
+                            "setWallpaper", "all", str(still), "fade"],
+                           capture_output=True, text=True, timeout=30)
+        if s.returncode != 0:
+            r = s
     return r
 
 

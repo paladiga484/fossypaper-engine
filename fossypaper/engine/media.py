@@ -37,7 +37,8 @@ def screenshot(wid: str, out: Path, opts: dict) -> bool:
                 return True
     if tools.have_renderer():
         env = dict(os.environ); env.update(session.gpu_env(opts.get("gpu", "auto")))
-        render_id = wp.render_id if wp is not None else wid
+        from . import render            # render imports media; bind late
+        render_id = render.scene_source(wp, opts) if wp is not None else wid
         out.unlink(missing_ok=True)
         if _render_one_frame([tools.BIN, "--screenshot", str(out), "--screenshot-delay", "90",
                               "--silent", render_id], env, out):

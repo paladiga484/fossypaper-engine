@@ -812,5 +812,88 @@ class LayerShellLiveTest(unittest.TestCase):
             self.assertEqual(engine.target_outputs({"output": "HDMI-A-1"}), ["HDMI-A-1"])
 
 
+class ShaderFixTest(unittest.TestCase):
+    """Custom Workshop shaders that linux-wallpaperengine can't compile, and
+    the minimal corrections that make them build."""
+
+    def setUp(self):
+        from fossypaper.engine import shaderfix
+        self.f = shaderfix
+        self.headers = {"common.h": "#define M_PI 3.14159265359\nfloat twice(float x) { return 2.0 * x; }",
+                        "common_blur.h": "#define BLUR 1\nvec4 blur(vec2 uv) { return texture(g_Texture0, uv); }"}
+
+    def fix(self, src, fragment=False):
+        return self.f.fix_shader(src, self.headers.get, fragment=fragment)
+
+    def test_broken_annotation_json_is_repaired(self):
+        bad = '{"material":"相对宽度,"combo":"W","type":"options","default":1,"require":{"M":1}}'
+        self.assertEqual(json.loads(self.f.repair_json(bad))["combo"], "W")
+        self.assertEqual(self.f.repair_json('{"a":1,}'), '{"a":1}')
+        self.assertIsNone(self.f.repair_json("{nope"))
+        out = self.fix('// [COMBO] ' + bad + '\r\nvoid main() {}\r\n')
+        self.assertIn('"相对宽度","combo"', out)
+        self.assertIn("\r\n", out)                       # CRLF files stay CRLF
+
+    def test_self_contained_headers_are_inlined_where_included(self):
+        src = '#include "common.h"\nfloat f() { return twice(M_PI); }\nuniform float g_X;\nvoid main() {}\n'
+        out = self.fix(src)
+        self.assertNotIn('#include "common.h"', out)
+        self.assertLess(out.index("#define M_PI"), out.index("float f()"))
+
+    def test_headers_that_need_shader_globals_keep_their_include(self):
+        out = self.fix('#include "common_blur.h"\nuniform sampler2D g_Texture0;\nvoid main() {}\n')
+        self.assertIn('#include "common_blur.h"', out)          # the renderer places the code
+        self.assertLess(out.index("#define BLUR"), out.index("uniform"))   # but defines come first
+
+    def test_stray_endif_is_dropped_and_open_if_closed(self):
+        out = self.fix("#if A\n#endif\n#endif\nvoid main() {}\n#if B\n")
+        lines = [l for l in out.split("\n") if l.strip().startswith(("#if", "#endif"))]
+        self.assertEqual(lines, ["#if A", "#endif", "#if B", "#endif"])
+
+    def test_fragment_inputs_that_are_written_get_a_copy(self):
+        src = ("varying vec4 v_TexCoord;\n#if Q\nvarying vec2 v_Q;\n#endif\n"
+               "void main() {\n  v_TexCoord.xz *= 2.0;\n#if Q\n  v_Q = vec2(0.0);\n#endif\n}\n")
+        out = self.fix(src, fragment=True)
+        self.assertIn("vec4 _fp_v_TexCoord;", out)
+        self.assertIn("_fp_v_TexCoord = v_TexCoord;", out)
+        # an input inside an #if gets its load guarded, so an untaken branch still compiles
+        self.assertIn("#ifdef _fp_have_v_Q", out)
+        self.assertEqual(self.fix(src, fragment=False).count("_fp_"), 0)   # vertex outputs are fine
+
+    def test_clean_shaders_are_left_alone(self):
+        src = "uniform float g_X;\nvoid main() { gl_Position = vec4(g_X); }\n"
+        self.assertEqual(self.fix(src), src)
+
+    def test_overlay_links_the_package_and_never_writes_into_the_workshop(self):
+        import struct
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            d = root / "lib" / "4242"
+            d.mkdir(parents=True)
+            files = {"scene.json": b"{}",
+                     "shaders/x.vert": b'#include "common.h"\nvoid main() { gl_Position = vec4(M_PI); }\n'}
+            idx, body = b"", b""
+            for name, data in files.items():
+                n = name.encode()
+                idx += struct.pack("<I", len(n)) + n + struct.pack("<II", len(body), len(data))
+                body += data
+            (d / "scene.pkg").write_bytes(struct.pack("<I", 8) + b"PKGV0001"
+                                          + struct.pack("<I", len(files)) + idx + body)
+            (d / "project.json").write_text('{"title":"t","type":"scene","file":"scene.json"}')
+            (root / "assets/shaders").mkdir(parents=True)
+            (root / "assets/shaders/common.h").write_text("#define M_PI 3.14\n")
+            before = sorted(p.name for p in d.iterdir())
+            wp = engine.read_wallpaper(d)
+            with patch.object(engine.shaderfix, "OVERLAYS", root / "overlay"), \
+                 patch.object(engine.library, "find", return_value=wp):
+                ov = engine.shaderfix.overlay_for(wp, {"assets_dir": str(root / "assets")})
+            self.assertIsNotNone(ov)
+            self.assertIn("#define M_PI", (ov / "shaders/x.vert").read_text())
+            self.assertFalse((ov / "scene.pkg").is_symlink())       # the renderer won't follow links
+            self.assertEqual((ov / "scene.pkg").read_bytes(), (d / "scene.pkg").read_bytes())
+            self.assertEqual(sorted(p.name for p in d.iterdir()), before)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -25,7 +25,7 @@ patches the submodule that defines a name, and every caller sees it.
 """
 from __future__ import annotations
 
-from . import tools, library, session, plasma, gnome, x11, render, media, colours, service, selftest
+from . import tools, library, session, plasma, gnome, x11, render, media, colours, service, selftest, shaderfix
 
 from .tools import (
     STATE, _WHICH, which, BIN, have_renderer,
@@ -86,7 +86,7 @@ def forget_tools() -> None:
 
 
 __all__ = [
-    'selftest', 'tools', 'library', 'session', 'plasma', 'gnome', 'x11', 'render', 'media',
+    'shaderfix', 'selftest', 'tools', 'library', 'session', 'plasma', 'gnome', 'x11', 'render', 'media',
     'colours', 'service', 'STATE', '_WHICH', 'which', 'BIN', 'have_renderer',
     'STEAM_WORKSHOP', 'FLATPAK_WORKSHOP', 'OWN_LIBRARY', 'library_roots', '_DirProxy',
     'WE_DIR', 'Property', 'Wallpaper', '_PREVIEW_GLOB', '_preview', '_VIDEO_EXT',

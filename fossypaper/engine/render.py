@@ -241,10 +241,24 @@ RENDER_LOG = tools.STATE / "renderer.log"
 _spawned: list = []
 
 
+def _own_scope(argv: list) -> list:
+    """kitty (and systemd-aware launchers) put each window in its own scope and
+    stop the scope when the window closes — which kills everything in that
+    cgroup, setsid or not. So closing lazypaper took the wallpaper down with it.
+    Give the renderer a scope of its own; systemd-run execs in place, so the
+    pid and environment are still ours."""
+    if not (tools.which("systemd-run") and os.environ.get("XDG_RUNTIME_DIR")
+            and os.path.exists(os.path.join(os.environ["XDG_RUNTIME_DIR"], "bus"))):
+        return argv
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+            "--unit", f"fossypaper-renderer-{os.getpid()}-{len(_spawned)}", *argv]
+
+
 def _spawn(argv, env=None):
     """Start a renderer detached, with its output in RENDER_LOG (rewritten on
     every apply) — a renderer that dies on its first frame used to vanish into
     /dev/null while the app said "applied"."""
+    argv = _own_scope(list(argv))
     tools.STATE.mkdir(parents=True, exist_ok=True)
     with open(RENDER_LOG, "a", encoding="utf-8") as log:
         log.write("$ " + " ".join(argv) + "\n")
@@ -278,7 +292,22 @@ def render_log_tail(n: int = 4) -> list[str]:
 def _start_wpe(wp: library.Wallpaper, opts: dict):
     env = dict(os.environ); env.update(session.gpu_env(opts.get("gpu", "auto")))
     env.setdefault("WALLPAPER_ENGINE_ASSETS", str(opts.get("assets_dir") or ""))
-    _spawn(build_argv(wp.render_id, opts), env)
+    _spawn(build_argv(scene_source(wp, opts), opts), env)
+
+
+def scene_source(wp: library.Wallpaper, opts: dict) -> str:
+    """What to hand linux-wallpaperengine as the wallpaper: an overlay folder
+    with corrected shaders when this one's own shaders wouldn't compile there,
+    else its Workshop id."""
+    if opts.get("shader_fixes", True):
+        try:
+            from . import shaderfix
+            overlay = shaderfix.overlay_for(wp, opts)
+        except OSError:
+            overlay = None
+        if overlay is not None:
+            return str(overlay)
+    return wp.render_id
 
 
 def _start_mpvpaper(wp: library.Wallpaper, opts: dict):
